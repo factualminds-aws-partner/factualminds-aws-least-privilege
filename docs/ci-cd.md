@@ -101,6 +101,10 @@ jobs:
 levels as CRITICAL and HIGH to `error`, MEDIUM to `warning`, LOW and INFO to `note`, with a
 `security-severity` property so GitHub shows critical/high/medium/low.
 
+An audit in which an analyzer could not run sets `executionSuccessful` to `false` in the SARIF
+run and lists each affected analyzer as a tool notification, so an incomplete audit does not
+look like a clean one.
+
 AWS resources are not files, and code scanning requires a file location. Results therefore
 point at the validated policy file, or at `fmaws.yaml` for an audit, and carry the AWS resource
 as a logical location and in the message.

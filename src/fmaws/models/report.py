@@ -18,8 +18,7 @@ class AnalyzerStatus(BaseModel):
     status: str  # COMPLETED | SKIPPED | FAILED
     detail: str = ""
     # The analyzer did not look at everything, for a reason other than configuration.
-    # Kept out of the report: it drives the --fail-on gate, the detail text explains it.
-    incomplete: bool = Field(default=False, exclude=True)
+    incomplete: bool = False
 
 
 class Observation(BaseModel):

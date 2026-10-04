@@ -1260,10 +1260,49 @@ def test_every_secret_of_one_region_is_still_every_secret():
     )
 
 
-def test_incomplete_flag_drives_the_gate_but_stays_out_of_the_report():
+def test_incomplete_flag_is_explicit_and_not_set_for_disabled_analyzers():
     _, statuses, _ = run({("rds", "describe_db_instances"): error("AccessDenied")},
                          config={"enabled_analyzers": ["rds", "s3"]})  # fmt: skip
     by_name = {s.name: s for s in statuses}
     assert by_name["rds"].incomplete and not by_name["s3"].incomplete
     assert not by_name["kms"].incomplete  # disabled on purpose is not incomplete
-    assert "incomplete" not in by_name["rds"].model_dump()
+    assert by_name["rds"].model_dump()["incomplete"] is True
+
+
+def test_external_id_alone_does_not_make_a_wildcard_trust_private():
+    document = trust({"AWS": "*"}, {"StringEquals": {"sts:ExternalId": "s3cr3t"}})
+    assert found(with_details(roles=[role("r", document)])) == {
+        ("IAM_ROLE_TRUST_PUBLIC", Severity.MEDIUM)
+    }
+
+
+def test_unreadable_block_public_access_is_unknown_not_disabled():
+    responses = s3_account(["b1"], account_bpa=error("AccessDenied"),
+                           get_public_access_block={"b1": error("AccessDenied")})  # fmt: skip
+    findings, statuses, _ = run(responses)
+    assert findings == []
+    detail = next(s for s in statuses if s.name == "s3").detail
+    assert "s3:GetAccountPublicAccessBlock failed" in detail
+    assert "s3:GetBucketPublicAccessBlock failed" in detail
+
+
+def test_sarif_marks_an_incomplete_audit_as_unsuccessful():
+    invocation = json.loads(render(sample_report(), "sarif"))["runs"][0]["invocations"][0]
+    assert invocation["executionSuccessful"] is False
+    assert "rds: skipped" in invocation["toolExecutionNotifications"][0]["message"]["text"]
+    findings, statuses, _ = run()
+    clean = Report(command="audit", findings=findings, analyzers=statuses)
+    assert json.loads(render(clean, "sarif"))["runs"][0]["invocations"][0] == {
+        "executionSuccessful": True,
+        "toolExecutionNotifications": [],
+    }
+
+
+def test_credential_report_that_never_completes_fails_the_analyzer(monkeypatch):
+    from fmaws.audit import iam
+
+    monkeypatch.setattr(iam.time, "sleep", lambda _: None)
+    _, statuses, _ = run({("iam", "generate_credential_report"): {"State": "STARTED"}})
+    by_name = {s.name: s for s in statuses}
+    assert by_name["iam_credentials"].status == "failed"
+    assert by_name["iam_credentials"].incomplete

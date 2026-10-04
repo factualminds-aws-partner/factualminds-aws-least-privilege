@@ -6,11 +6,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ApplicationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     environment: str | None = None
 
 
 class AwsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     region: str | None = None
     account_id: str | None = Field(default=None, pattern=r"^\d{12}$")
     profile: str | None = None
@@ -18,12 +22,19 @@ class AwsConfig(BaseModel):
 
 
 class PolicyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     include_conditions: bool = True
+    # Accepted for compatibility with published examples. Generated identity policies never
+    # grant public access, so the setting has no effect.
+    deny_public_access: bool = True
     # Severity of ``service:*`` actions found by local validation.
     wildcard_action_threshold: Literal["info", "warning", "error"] = "warning"
 
 
 class DiscoveryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
     # Files or directories relative to the project root. Empty means the whole project.
     paths: list[str] = Field(default_factory=list)
@@ -49,10 +60,14 @@ SeverityName = Literal["critical", "high", "medium", "low", "info"]
 
 
 class ThresholdConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     fail_on: list[SeverityName] = Field(default_factory=list)
 
 
 class AuditConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # Analyzer names to run. Empty means all.
     enabled_analyzers: list[str] = Field(default_factory=list)
     regions: list[str] = Field(default_factory=list)
@@ -80,6 +95,8 @@ class AuditConfig(BaseModel):
 
 
 class ObserveConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # Role or user the application runs as (ARN).
     principal: str | None = None
     days: int = Field(default=30, ge=1, le=400)
@@ -90,6 +107,8 @@ class ObserveConfig(BaseModel):
 
 
 class Config(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     application: ApplicationConfig = Field(default_factory=ApplicationConfig)
     aws: AwsConfig = Field(default_factory=AwsConfig)
     resources: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)

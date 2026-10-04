@@ -37,7 +37,20 @@ class ArnContext:
             raise ConfigError(f"Invalid AWS account ID '{self.account}'.")
 
 
+SQS_URL_RE = re.compile(
+    r"https://sqs\.([a-z0-9-]+)\.amazonaws\.com/(\d{12})/([A-Za-z0-9_-]+(?:\.fifo)?)"
+)
+
+
+def sqs_url_to_arn(url: str, partition: str = "aws") -> str | None:
+    """The queue ARN for a queue URL, which is what applications usually have in configuration."""
+    match = SQS_URL_RE.fullmatch(url)
+    return f"arn:{partition}:sqs:{match[1]}:{match[2]}:{match[3]}" if match else None
+
+
 def validate_name(name: str, what: str) -> str:
+    if "://" in name:
+        raise ConfigError(f"Invalid {what} '{name}': use the resource name or ARN, not a URL.")
     if not NAME_RE.fullmatch(name):
         raise ConfigError(
             f"Invalid {what} '{name}': names may not contain wildcards, spaces or quotes."

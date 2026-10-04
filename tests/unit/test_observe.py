@@ -464,3 +464,30 @@ def test_cli_errors(cli, tmp_path):
         "--principal", ROLE, config=SQS_PROJECT,
     )  # fmt: skip
     assert denied.exit_code == 3 and "iam:GenerateServiceLastAccessedDetails" in denied.output
+
+
+def test_not_action_statements_are_reported_and_never_dropped():
+    not_action = {"Sid": "Rest", "Effect": "Allow", "NotAction": "iam:*", "Resource": "*"}
+    document = candidate(allow("S3", "s3:PutObject"), not_action)
+    evidence = evidence_from(service("s3", ago(1), PutObject=None))
+    for days in (30, 120):
+        observations = obs.classify(document, evidence, ago(days))
+        assert ("NotAction", obs.UNKNOWN, "Rest") in {
+            (o.action, o.status, o.statement) for o in observations
+        }
+        policy = obs.recommend(document, observations, days, 90, set())
+        assert not_action in policy["Statement"]
+
+
+def test_cli_merged_declared_and_discovered_statement_is_never_trimmed(cli, tmp_path):
+    (tmp_path / "main.tf").write_text('resource "aws_sqs_queue" "extra" {\n  name = "extra"\n}\n')
+    project = {**SQS_PROJECT, "resources": {"sqs": [{"queue": "orders", "actions": ["read"]}]}}
+    evidence = last_accessed_responses(
+        service("sqs", ago(1), GetQueueAttributes=None, GetQueueUrl=None)
+    )
+    result, _, root = cli(evidence, "--principal", ROLE, "--days", "120", "--output", "rec.json",
+                          config=project)  # fmt: skip
+    assert result.exit_code == 0, result.output
+    statement = json.loads((root / "rec.json").read_text())["Statement"][0]
+    assert len(statement["Resource"]) == 2  # declared and discovered queue share one statement
+    assert statement["Action"] == ["sqs:GetQueueAttributes", "sqs:GetQueueUrl"]

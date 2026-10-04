@@ -36,12 +36,18 @@ def merge_requirements(
         resource = next(
             (r.resource for r in evidence if r.resource.startswith("arn:")), best.resource
         )
+        # Evidence without a prefix is about the whole bucket, which then covers the rest.
+        prefixes: list[list[str]] = [r.options.get("prefixes") or [] for r in evidence]
+        options = (
+            {"prefixes": sorted({p for found in prefixes for p in found})} if all(prefixes) else {}
+        )
         merged.append(
             best.model_copy(
                 update={
                     "resource": resource,
                     "intents": tuple(intents),
                     "intent_confirmed": bool(confirmed),
+                    "options": options,
                 }
             )
         )

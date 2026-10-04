@@ -24,6 +24,7 @@ _DELETE = (
     "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:DeleteBucket", "s3:DeleteBucketPolicy",
 )  # fmt: skip
 # Defense-in-depth findings are reported once for all affected buckets, not once per bucket.
+_UNREADABLE = "unreadable"
 _AGGREGATED = (
     "S3_BUCKET_BPA_DISABLED", "S3_ACLS_ENABLED", "S3_VERSIONING_DISABLED", "S3_LOGGING_DISABLED",
 )  # fmt: skip
@@ -35,20 +36,21 @@ class S3:
 
     def run(self, ctx: AuditContext, region: str | None) -> list[Finding]:
         buckets = [b["Name"] for b in ctx.pages("s3", "list_buckets", "Buckets")]
-        account_bpa = (
-            ctx.optional(
-                "s3control",
-                "get_public_access_block",
-                ctx.home_region,
-                missing=("NoSuchPublicAccessBlockConfiguration",),
-                AccountId=ctx.account,
-            )
-            or {}
-        ).get("PublicAccessBlockConfiguration", {})
+        # None means the setting could not be read: unknown, never "off".
+        account_response = ctx.optional(
+            "s3control",
+            "get_public_access_block",
+            ctx.home_region,
+            missing=("NoSuchPublicAccessBlockConfiguration",),
+            AccountId=ctx.account,
+        )
+        account_bpa = (account_response or {}).get("PublicAccessBlockConfiguration", {})
+        if account_response is None:
+            account_bpa = {**account_bpa, _UNREADABLE: True}
 
         findings: list[Finding] = []
         off = [flag for flag in _BPA_FLAGS if not account_bpa.get(flag)]
-        if off:
+        if off and account_response is not None:
             findings.append(
                 make(
                     "S3_ACCOUNT_BPA_DISABLED",
@@ -86,9 +88,9 @@ class S3:
         def get(operation: str, *missing: str) -> dict[str, Any] | None:
             return ctx.optional("s3", operation, missing=missing, Bucket=name)
 
-        bucket_bpa = (
-            get("get_public_access_block", "NoSuchPublicAccessBlockConfiguration") or {}
-        ).get("PublicAccessBlockConfiguration", {})
+        bucket_response = get("get_public_access_block", "NoSuchPublicAccessBlockConfiguration")
+        bucket_bpa = (bucket_response or {}).get("PublicAccessBlockConfiguration", {})
+        bpa_known = bucket_response is not None and not account_bpa.get(_UNREADABLE)
         policy = (get("get_bucket_policy", "NoSuchBucketPolicy") or {}).get("Policy")
         acl = get("get_bucket_acl") or {}
         ownership = get("get_bucket_ownership_controls", "OwnershipControlsNotFoundError")
@@ -195,7 +197,7 @@ class S3:
             )
 
         flags: list[str] = []
-        if not all(blocked(flag) for flag in _BPA_FLAGS):
+        if bpa_known and not all(blocked(flag) for flag in _BPA_FLAGS):
             flags.append("S3_BUCKET_BPA_DISABLED")
         if ownership is not None and not acls_disabled:
             flags.append("S3_ACLS_ENABLED")

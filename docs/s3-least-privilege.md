@@ -90,7 +90,9 @@ not needed to perform a multipart upload.
 ## Buckets found by discovery
 
 When a bucket is discovered but not declared, fmaws does not know which folders the application
-uses. It grants `s3:GetObject` on the whole bucket, lowers the confidence, and lists the bucket
+uses. The exception is an object ARN found in the project
+(`arn:aws:s3:::bucket/exports/2024/file.csv`): it is evidence for its folder (`exports/2024/`)
+only. It grants `s3:GetObject` on the whole bucket, lowers the confidence, and lists the bucket
 under "Unconfirmed access". Declare the bucket with its prefixes to tighten it. When an AWS SDK
 call with a literal bucket name is found, the actions are inferred from the calls in that file
 (`get_object` is `read`, `put_object` is `write`, `list_objects_v2` is `list`).

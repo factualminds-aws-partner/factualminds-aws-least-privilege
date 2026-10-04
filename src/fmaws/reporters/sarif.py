@@ -82,6 +82,7 @@ def render_sarif(report: Report) -> str:
                 },
             }
         )
+    incomplete = [a for a in report.analyzers if a.incomplete]
     document = {
         "$schema": SCHEMA,
         "version": "2.1.0",
@@ -100,6 +101,19 @@ def render_sarif(report: Report) -> str:
                     }
                 },
                 "results": results,
+                # Code scanning must not show an audit that could not look as a clean run.
+                "invocations": [
+                    {
+                        "executionSuccessful": not incomplete,
+                        "toolExecutionNotifications": [
+                            {
+                                "level": "warning",
+                                "message": {"text": f"{a.name}: {a.status}, {a.detail}"},
+                            }
+                            for a in incomplete
+                        ],
+                    }
+                ],
             }
         ],
     }

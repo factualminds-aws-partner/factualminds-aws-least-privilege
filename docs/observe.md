@@ -73,7 +73,9 @@ when **all** of these hold:
 2. the observation period is at least `observe.min_days_for_removal` (default 90 days),
 3. the permission was **not declared** in `fmaws.yaml`.
 
-Every removal is listed in the report. With the default 30-day period nothing is removed and
+Every removal is listed in the report. A statement that combines declared and discovered
+resources counts as declared. `NotAction` statements cannot be observed action by action; they
+are reported as unknown and always kept unchanged. With the default 30-day period nothing is removed and
 the report says so. Permissions you declared explicitly are never removed by observation; if
 they show as unused, that is information for you to act on in `fmaws.yaml`.
 

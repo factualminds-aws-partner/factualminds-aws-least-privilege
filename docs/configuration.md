@@ -90,6 +90,8 @@ writing a broader policy than you asked for.
 - `include_conditions` (default `true`): add `kms:ViaService` and `s3:ResourceAccount`
   conditions. The S3 `s3:prefix` condition is always written because it is what limits listing
   to a folder.
+- `deny_public_access` is accepted for compatibility with published examples and has no
+  effect: a generated identity policy never grants public access.
 - `wildcard_action_threshold` (default `warning`): severity of `service:*` actions in local
   validation. `iam:*`, `sts:*`, `kms:*` and `organizations:*` are always errors.
 
@@ -147,7 +149,7 @@ observe:
 
 See [observe](observe.md).
 
-## Other sections
+## Unknown keys
 
-Unknown top-level sections are accepted and ignored, so a configuration written for a later
-version does not break this one.
+Unknown or misspelled keys anywhere in the file are a configuration error (exit code 2), so a
+typo such as `polcy:` cannot silently fall back to defaults.

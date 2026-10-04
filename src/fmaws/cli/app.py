@@ -460,7 +460,13 @@ def observe(
                 "Create fmaws.yaml or pass --policy."
             )
         candidate = policy.to_iam()
-        declared = {s.sid for s in policy.statements if s.confidence is Confidence.HIGH}
+        # A statement merged from declared and discovered resources counts as declared: nothing
+        # backed by fmaws.yaml may be removed.
+        declared = {
+            s.sid
+            for s in policy.statements
+            if any(e.confidence is Confidence.HIGH for e in s.explanations)
+        }
         notes.extend(generated.notes)
 
     provider = _provider(settings, profile, region)
@@ -508,6 +514,6 @@ def observe(
         },
     )
     if output is not None:
-        _write(output, json.dumps(recommended, indent=2) + "\n")
+        _write(output, redact(json.dumps(recommended, indent=2) + "\n"))
         report.policy_path = str(output)
     emit(render(report, fmt))

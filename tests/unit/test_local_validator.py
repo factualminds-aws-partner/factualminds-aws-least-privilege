@@ -400,3 +400,29 @@ def test_a_condition_lowers_but_never_hides_privilege_escalation():
     assert ids(doc(statement))["POLICY_PRIVILEGE_ESCALATION"] is Severity.MEDIUM
     always_true = allow("iam:AttachRolePolicy", "*", Condition={"StringLike": {"aws:userid": "*"}})
     assert ids(doc(always_true))["POLICY_PRIVILEGE_ESCALATION"] is Severity.HIGH
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "arn:aws:logs:us-east-1:111122223333:log-group:*:*",
+        "arn:aws:logs:us-east-1:111122223333:log-group:*",
+        "arn:aws:iam::111122223333:role/*",
+    ],
+)
+def test_type_wide_wildcards_with_extra_segments(resource):
+    assert (
+        ids(doc(allow("logs:PutLogEvents", resource)))["POLICY_BROAD_RESOURCE"] is Severity.MEDIUM
+    )
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "arn:aws:logs:us-east-1:111122223333:log-group:/app/api:*",
+        "arn:aws:dynamodb:us-east-1:111122223333:table/orders/index/*",
+        "arn:aws:iam::111122223333:role/app-*",
+    ],
+)
+def test_wildcards_under_a_named_resource_are_not_type_wide(resource):
+    assert "POLICY_BROAD_RESOURCE" not in ids(doc(allow("logs:PutLogEvents", resource)))

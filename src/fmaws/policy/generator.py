@@ -13,6 +13,7 @@ from fmaws.policy.arns import (
     kms_key_arn,
     kms_via_service,
     parse_arn,
+    sqs_url_to_arn,
     validate_name,
 )
 from fmaws.policy.optimizer import optimize
@@ -25,6 +26,8 @@ def _resources(req: ResourceRequirement, ctx: ArnContext) -> tuple[list[str], Co
     """Base resources, conditions and an explanation note for one non-S3 requirement."""
     definition = catalog.get(req.service)
     name = req.resource
+    if req.service == "sqs":
+        name = sqs_url_to_arn(name, ctx.partition) or name
     if name.startswith("arn:"):
         if parse_arn(definition, name) is None:
             raise ConfigError(f"Malformed {definition.title} ARN '{name}'.")

@@ -76,14 +76,18 @@ def _drop_covered(statements: list[Statement]) -> list[Statement]:
     """Remove actions already granted on the same resources by a broader statement."""
     extra: dict[int, tuple[Explanation, ...]] = {}
     kept: dict[int, Statement] = {}
+    # Processed in order against the current state: once a statement has given an action up,
+    # it no longer counts as covering it, so two statements can never drop the same action.
     actions = [set(s.actions) for s in statements]
     for index, statement in enumerate(statements):
-        remaining = set(actions[index])
         covering = [
-            i for i, other in enumerate(statements) if i != index and _covers(other, statement)
+            i
+            for i, other in enumerate(statements)
+            if i != index and actions[i] and _covers(other, statement)
         ]
         for i in covering:
-            remaining -= actions[i]
+            actions[index] -= actions[i]
+        remaining = actions[index]
         if remaining:
             kept[index] = statement.model_copy(update={"actions": tuple(sorted(remaining))})
         else:
@@ -106,12 +110,18 @@ def _sid(statement: Statement) -> str:
 
 def optimize(statements: list[Statement]) -> list[Statement]:
     result = [_normalize(s) for s in statements if s.actions and s.resources]
-    result = _merge(
-        result, lambda s: (_service(s), s.resources, _conditions_key(s.conditions)), "actions"
-    )
-    result = _merge(
-        result, lambda s: (_service(s), s.actions, _conditions_key(s.conditions)), "resources"
-    )
-    result = _drop_covered([_normalize(s) for s in result])
+    # Each merge can make another one possible, so repeat until nothing changes.
+    while True:
+        merged = _merge(
+            result, lambda s: (_service(s), s.resources, _conditions_key(s.conditions)), "actions"
+        )
+        merged = _merge(
+            merged, lambda s: (_service(s), s.actions, _conditions_key(s.conditions)), "resources"
+        )
+        merged = [_normalize(s) for s in merged]
+        if len(merged) == len(result):
+            break
+        result = merged
+    result = _drop_covered(merged)
     result.sort(key=lambda s: (_service(s), s.resources, s.actions, _conditions_key(s.conditions)))
     return [s.model_copy(update={"sid": _sid(s)}) for s in result]

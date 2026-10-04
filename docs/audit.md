@@ -110,7 +110,7 @@ reported at all because AWS offers no narrower form.
 
 | Finding | Severity |
 |---|---|
-| `IAM_ROLE_TRUST_PUBLIC` (`Principal: "*"`) | CRITICAL; MEDIUM when a condition applies that fmaws cannot verify |
+| `IAM_ROLE_TRUST_PUBLIC` (`Principal: "*"`) | CRITICAL; MEDIUM when a condition applies that fmaws cannot verify. `sts:ExternalId` alone is such a condition: it is a shared secret, not an identity |
 | `IAM_ROLE_TRUST_OIDC_UNRESTRICTED` (the `sub` claim is not pinned to an owner, for example `repo:*`) | HIGH |
 | `IAM_ROLE_TRUST_CROSS_ACCOUNT` | MEDIUM; LOW with `sts:ExternalId` or an organization condition; not reported for `trusted_accounts` |
 | `IAM_ROLE_UNUSED` (older and idle longer than `unused_days`) | LOW, confidence MEDIUM |

@@ -15,14 +15,11 @@ import yaml
 from fmaws.discovery.base import Detection, register
 from fmaws.models.requirement import Confidence, ResourceRequirement, SourceRef
 from fmaws.policy import catalog, s3
-from fmaws.policy.arns import NAME_RE, parse_arn
+from fmaws.policy.arns import NAME_RE, SQS_URL_RE, parse_arn
 from fmaws.utils.text import find_line, line_at
 
 _ARN_RE = re.compile(
     r"arn:(?:aws|aws-cn|aws-us-gov):[a-z0-9-]+:[a-z0-9-]*:(?:\d{12})?:[^\s\"'`,;<>()\[\]{}\\]+"
-)
-_SQS_URL_RE = re.compile(
-    r"https://sqs\.([a-z0-9-]+)\.amazonaws\.com/(\d{12})/([A-Za-z0-9_-]+(?:\.fifo)?)"
 )
 _S3_ARN_RE = re.compile(
     r"^arn:(?:aws|aws-cn|aws-us-gov):s3:::([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])(/.*)?$"
@@ -93,7 +90,7 @@ class ArnDetector:
         if relative_path.endswith(".json") and _is_policy_document(text):
             # A standalone IAM policy describes what is granted, not what the application uses.
             return result
-        for match in _SQS_URL_RE.finditer(text):
+        for match in SQS_URL_RE.finditer(text):
             region, account, name = match.groups()
             arn = f"arn:aws:sqs:{region}:{account}:{name}"
             self._add(result, arn, relative_path, text, match.start(), "SQS queue URL")
@@ -111,16 +108,16 @@ class ArnDetector:
         line = line_at(text, offset)
         bucket = _S3_ARN_RE.match(arn)
         if bucket:
-            result.requirements.append(
-                _requirement(
-                    "s3",
-                    bucket.group(1),
-                    file,
-                    line,
-                    f"{kind} referenced in {file}",
-                    Confidence.MEDIUM,
-                )
+            requirement = _requirement(
+                "s3", bucket.group(1), file, line, f"{kind} referenced in {file}", Confidence.MEDIUM
             )
+            key = (bucket.group(2) or "/")[1:]
+            if key:
+                # An object ARN is evidence for its folder, never for the whole bucket.
+                folder = key if key.endswith("/") else key.rpartition("/")[0] + "/"
+                prefix = f"{key}*" if folder == "/" else folder
+                requirement = requirement.model_copy(update={"options": {"prefixes": [prefix]}})
+            result.requirements.append(requirement)
             return
         for definition in catalog.CATALOG.values():
             parsed = parse_arn(definition, arn)
@@ -554,15 +551,21 @@ class SdkDetector:
             if service == "bedrock":
                 first_seen = {n: o for n, o in first_seen.items() if _BEDROCK_MODEL_RE.fullmatch(n)}
             # With several resources in one file the calls cannot be attributed to one of them.
+            # Those resources get the service default and are listed as unconfirmed, rather than
+            # every resource receiving every action seen in the file.
             confident = intents if len(first_seen) == 1 else ()
             for name, offset in sorted(first_seen.items()):
-                requirement = _requirement(
-                    service, name, relative_path, line_at(text, offset),
-                    f"AWS SDK call in {relative_path}", Confidence.MEDIUM, confident,
-                )  # fmt: skip
-                if not confident and intents:
-                    requirement = requirement.model_copy(update={"intents": intents})
-                result.requirements.append(requirement)
+                result.requirements.append(
+                    _requirement(
+                        service,
+                        name,
+                        relative_path,
+                        line_at(text, offset),
+                        f"AWS SDK call in {relative_path}",
+                        Confidence.MEDIUM,
+                        confident,
+                    )  # fmt: skip
+                )
         return result
 
 

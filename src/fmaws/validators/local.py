@@ -27,7 +27,7 @@ _VARIABLE_RE = re.compile(r"\$\{[^}]*\}")
 _SID_RE = re.compile(r"[A-Za-z0-9]*")
 # A resource part that matches two unrelated names matches everything in the service.
 _PROBES = ("a7/fmaws-probe", "zq/k/fmaws:probe-b")
-_TYPE_WIDE_RE = re.compile(r"[A-Za-z-]+[:/]\*+")
+_TYPE_PREFIX_RE = re.compile(r"[A-Za-z-]+[:/]")
 _TOP_LEVEL_KEYS = {"Version", "Id", "Statement"}
 _STATEMENT_KEYS = {
     "Sid", "Effect", "Principal", "NotPrincipal", "Action", "NotAction", "Resource",
@@ -623,6 +623,15 @@ def _star_resource_findings(
     return findings
 
 
+def _type_wide(name: str) -> bool:
+    """Matches arbitrary resources of one type: "table/*", "secret:*", "log-group:*:*"."""
+    prefix = _TYPE_PREFIX_RE.match(name)
+    if prefix is None or "*" not in name:
+        return False
+    samples = (f"{prefix[0]}{PROBE}", f"{prefix[0]}{PROBE}:{PROBE}")
+    return any(iam_match(name, sample) for sample in samples)
+
+
 def _arn_findings(
     resources: list[str], condition: dict[str, Any], conditioned: bool, where: str
 ) -> list[Finding]:
@@ -634,7 +643,7 @@ def _arn_findings(
             continue
         service, account, name = parts[2], parts[4], parts[5]
         # "bucket/*" has the same shape as a type-wide ARN but is one bucket.
-        if _TYPE_WIDE_RE.fullmatch(name) and service != "s3":
+        if _type_wide(name) and service != "s3":
             if service == "kms" and _pins_kms_alias(condition):
                 continue  # the documented way to authorize a key by alias
             suffix = ", limited only by its condition." if conditioned else "."

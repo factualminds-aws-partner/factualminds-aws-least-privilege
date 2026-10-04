@@ -23,8 +23,10 @@ _RESTRICTING_KEYS = {
     "aws:sourceip", "aws:sourcevpce", "aws:sourcevpc", "aws:principalorgid",
     "aws:principalorgpaths", "aws:sourcearn", "aws:sourceaccount", "aws:sourceowner",
     "aws:principalaccount", "aws:principalarn", "s3:dataaccesspointaccount",
-    "kms:calleraccount", "sts:externalid",
+    "kms:calleraccount",
 }  # fmt: skip
+# sts:ExternalId is deliberately absent: it is a shared secret, not an identity, so a wildcard
+# principal that only requires one is still open to every account that learns it.
 # kms:ViaService is deliberately absent: it pins the AWS service a request comes through, and
 # principals of any account can call through that service.
 # Operators that can pin a value. Negated and IfExists forms do not: the first excludes instead
@@ -175,6 +177,10 @@ def _restrictions(statement: dict[str, Any]) -> list[tuple[str, list[Any]]]:
 def is_restricted(statement: dict[str, Any]) -> bool:
     """True when a condition pins the caller to a network, organization, account or resource."""
     return any(key in _RESTRICTING_KEYS for key, _ in _restrictions(statement))
+
+
+def requires_external_id(statement: dict[str, Any]) -> bool:
+    return any(key == "sts:externalid" for key, _ in _restrictions(statement))
 
 
 def _specific_subject(value: Any, operator: str) -> bool:

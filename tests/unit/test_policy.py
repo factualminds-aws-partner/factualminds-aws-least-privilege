@@ -247,3 +247,54 @@ def test_arn_context_accepts_real_regions_and_wildcards():
 def test_iam_match_without_wildcards_is_plain_equality():
     assert iam_match("arn:aws:s3:::b/a.b", "arn:aws:s3:::b/a.b")
     assert not iam_match("arn:aws:s3:::b/a.b", "arn:aws:s3:::b/aXb")
+
+
+def test_optimizer_never_loses_an_action_when_statements_cover_each_other():
+    result = optimize(
+        [
+            stmt(["s3:GetObject"], ["b/a/*"]),
+            stmt(["s3:GetObject"], ["b/c/*"]),
+            stmt(["s3:GetObject", "s3:PutObject"], ["b/a/*", "b/c/*"]),
+        ]
+    )
+    granted = {(a, r) for s in result for a in s.actions for r in s.resources}
+    assert granted == {
+        ("s3:GetObject", "b/a/*"),
+        ("s3:GetObject", "b/c/*"),
+        ("s3:PutObject", "b/a/*"),
+        ("s3:PutObject", "b/c/*"),
+    }
+    assert len(result) == 1
+
+
+def test_optimizer_output_grants_exactly_what_the_input_granted():
+    import random
+
+    rng = random.Random(7)  # noqa: S311  deterministic test data, not cryptography
+    actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    resources = ["b/*", "b/a/*", "b/a/x/*", "b/c/*", "d/*"]
+    probes = ["b/q", "b/a/q", "b/a/x/q", "b/c/q", "d/q", "e/q"]
+
+    def grants(statements):
+        return {
+            (a, p)
+            for s in statements
+            for a in s.actions
+            for p in probes
+            if any(iam_match(r, p) for r in s.resources)
+        }
+
+    for _ in range(300):
+        given = [
+            stmt(rng.sample(actions, rng.randint(1, 3)), rng.sample(resources, rng.randint(1, 3)))
+            for _ in range(rng.randint(1, 5))
+        ]
+        assert grants(optimize(given)) == grants(given), given
+
+
+def test_sqs_queue_url_in_configuration_becomes_the_queue_arn():
+    url = "https://sqs.eu-west-1.amazonaws.com/444455556666/orders.fifo"
+    (statement,) = statements(req("sqs", url, ("send",)))
+    assert statement["Resource"] == "arn:aws:sqs:eu-west-1:444455556666:orders.fifo"
+    with pytest.raises(ConfigError, match="not a URL"):
+        statements(req("dynamodb", "https://example.com/table", ("read",)))

@@ -125,7 +125,7 @@ def cloudtrail_events(
     if is_user:
         # Roles cannot be filtered server-side: their events carry the session name.
         kwargs["LookupAttributes"] = [{"AttributeKey": "Username", "AttributeValue": name}]
-    scanned = 0
+    scanned = unreadable = 0
     token: str | None = None
     while True:
         page = _call(provider, "cloudtrail", "lookup_events", region,
@@ -135,6 +135,7 @@ def cloudtrail_events(
             try:
                 detail = json.loads(event.get("CloudTrailEvent") or "{}")
             except ValueError:
+                unreadable += 1
                 continue
             identity = detail.get("userIdentity") or {}
             issuer = ((identity.get("sessionContext") or {}).get("sessionIssuer") or {}).get("arn")
@@ -158,6 +159,10 @@ def cloudtrail_events(
             )
             break
         sleep(LOOKUP_PAUSE)
+    if unreadable:
+        evidence.notes.append(
+            f"{unreadable} CloudTrail event(s) could not be parsed and were skipped."
+        )
     where = region or provider.region or "the default Region"
     evidence.sources.append(f"CloudTrail management events ({where})")
     evidence.notes.append(
@@ -220,6 +225,17 @@ def classify(document: dict[str, Any], evidence: Evidence, cutoff: datetime) -> 
         for label, _, actions in _allow_statements(document)
         for action in actions
     ]
+    for label, statement, _ in _allow_statements(document):
+        if "NotAction" in statement:
+            observations.append(
+                Observation(
+                    action="NotAction",
+                    status=UNKNOWN,
+                    statement=label,
+                    detail="A NotAction statement allows an open-ended set of actions that "
+                    "cannot be observed individually. It is kept unchanged.",
+                )
+            )
 
     def missing(action: str, when: datetime | None, source: str, detail: str) -> None:
         if not _allowed(candidate, action) and not any(
@@ -305,9 +321,11 @@ def recommend(
             if observation.status == UNUSED and observation.statement not in declared:
                 observation.removed = True
                 removable.add((observation.statement, observation.action))
+    # Only statements that list their actions can be trimmed. NotAction is passed through.
     trimmed = {
         id(statement): [a for a in actions if (label, a) not in removable]
         for label, statement, actions in _allow_statements(document)
+        if "Action" in statement
     }
     kept: list[Any] = []
     for statement in as_list(document.get("Statement", [])):

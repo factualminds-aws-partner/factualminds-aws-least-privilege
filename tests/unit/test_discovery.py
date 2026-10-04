@@ -288,3 +288,43 @@ def test_merge_declared_wins_and_evidence_is_folded():
         ("sns", "arn:aws:sns:us-east-1:111122223333:events", ("publish",), Confidence.MEDIUM),
     ]
     assert merged[1].intent_confirmed and not merged[2].intent_confirmed
+
+
+def test_object_arn_is_evidence_for_its_folder_not_the_bucket(tmp_path):
+    from fmaws.policy.arns import ArnContext
+    from fmaws.policy.generator import generate_policy
+
+    write(
+        tmp_path,
+        "config/app.yaml",
+        "export: arn:aws:s3:::other-bucket/exports/2024/file.csv\n"
+        "inbox: arn:aws:s3:::other-bucket/inbox/\n"
+        "top: arn:aws:s3:::flat-bucket/file.csv\n"
+        "whole: arn:aws:s3:::whole-bucket\n"
+        "also: arn:aws:s3:::whole-bucket/logs/\n",
+    )
+    merged = merge_requirements([], discover(tmp_path).requirements)
+    by_bucket = {r.resource: r.options.get("prefixes") for r in merged}
+    assert by_bucket == {
+        "other-bucket": ["exports/2024/", "inbox/"],
+        "flat-bucket": ["file.csv*"],
+        "whole-bucket": None,
+    }
+    policy = generate_policy(merged, ArnContext()).to_json()
+    assert "arn:aws:s3:::other-bucket/exports/2024/*" in policy
+    assert "arn:aws:s3:::other-bucket/*" not in policy
+    assert "arn:aws:s3:::flat-bucket/file.csv*" in policy
+
+
+def test_sdk_calls_are_not_attributed_when_a_file_uses_several_resources(tmp_path):
+    write(
+        tmp_path,
+        "src/jobs.py",
+        "import boto3\ns3 = boto3.client('s3')\n"
+        "s3.get_object(Bucket='read-only-bucket', Key=k)\n"
+        "s3.delete_object(Bucket='scratch-bucket', Key=k)\n",
+    )
+    resources = found(discover(tmp_path))
+    for bucket in ("read-only-bucket", "scratch-bucket"):
+        assert resources[("s3", bucket)].intents == ("read",)
+        assert not resources[("s3", bucket)].intent_confirmed

@@ -13,6 +13,7 @@ from typing import Any
 from fmaws.audit import policies
 from fmaws.audit.base import UNREADABLE, AuditContext, register
 from fmaws.audit.findings import RULES, make
+from fmaws.errors import AwsAuthError
 from fmaws.models.finding import Finding, Severity
 from fmaws.models.requirement import Confidence
 from fmaws.policy.arns import PROBE, iam_match
@@ -45,6 +46,8 @@ def credential_report(ctx: AuditContext) -> list[dict[str, str]]:
             if ctx.call("iam", "generate_credential_report").get("State") == "COMPLETE":
                 break
             time.sleep(2)
+        else:
+            raise TimeoutError("IAM did not finish the credential report in time")
         content = ctx.call("iam", "get_credential_report")["Content"]
         text = content.decode("utf-8") if isinstance(content, bytes) else str(content)
         return list(csv.DictReader(io.StringIO(text)))
@@ -85,6 +88,8 @@ class IamRoot:
         root: dict[str, str] = {}
         try:
             root = next((r for r in credential_report(ctx) if r.get("user") == ROOT), {})
+        except AwsAuthError:
+            raise
         except Exception:  # noqa: BLE001  the report is optional here; iam_credentials reports it
             ctx.gap("iam:GetCredentialReport")
 
@@ -358,7 +363,10 @@ class IamRoles:
                 accounts = policies.external_accounts(statement, ctx.account, trusted)
                 if accounts:
                     external |= accounts
-                    guarded = guarded and policies.is_restricted(statement)
+                    guarded = guarded and (
+                        policies.is_restricted(statement)
+                        or policies.requires_external_id(statement)
+                    )
                 oidc = [
                     p for p in policies.federated_principals(statement) if "oidc-provider/" in p
                 ]

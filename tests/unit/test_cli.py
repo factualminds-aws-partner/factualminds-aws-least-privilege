@@ -441,3 +441,30 @@ def test_region_hints_from_project_files_cannot_inject_arn_fields(project):
     assert result.exit_code == 0, result.output
     policy = (root / "generated-policy.json").read_text()
     assert "arn:aws:sqs:*:*:jobs" in policy and "999999999999" not in policy
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "polcy:\n  include_conditions: false\n",
+        "policy:\n  include_condition: false\n",
+        "aws:\n  acount_id: '111122223333'\n",
+        "audit:\n  ignored_finding: [X]\n",
+        "observe:\n  day: 30\n",
+    ],
+)
+def test_misspelled_configuration_keys_are_errors(project, content):
+    root = project()
+    (root / "fmaws.yaml").write_text(content)
+    result = runner.invoke(app, ["generate"])
+    assert result.exit_code == 2 and "Invalid configuration" in result.output
+
+
+def test_published_example_configuration_is_accepted(project):
+    root = project()
+    (root / "fmaws.yaml").write_text(
+        "policy:\n  include_conditions: true\n  deny_public_access: true\n"
+        "  wildcard_action_threshold: warning\n"
+        "resources:\n  sqs:\n    - queue: jobs\n      actions: [send]\n"
+    )
+    assert runner.invoke(app, ["generate"]).exit_code == 0
