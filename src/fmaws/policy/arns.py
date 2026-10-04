@@ -2,9 +2,10 @@
 
 import re
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, lru_cache
 
 from fmaws.errors import ConfigError
+from fmaws.models.policy import Conditions
 from fmaws.policy import catalog
 from fmaws.policy.catalog import ServiceDefinition
 
@@ -12,11 +13,28 @@ from fmaws.policy.catalog import ServiceDefinition
 NAME_RE = re.compile(r"[A-Za-z0-9_+=,.@/:#-]+")
 
 
+REGION_RE = re.compile(r"[a-z]{2}(-[a-z]+)+-\d")
+PARTITIONS = ("aws", "aws-cn", "aws-us-gov")
+# A value no real resource has: a pattern that matches a name built from it matches everything.
+PROBE = "fmaws-probe-7f3a"
+
+
 @dataclass(frozen=True)
 class ArnContext:
+    """The fields every generated ARN shares. Each is validated: a stray ``:`` or wildcard in
+    one of them would shift or widen the ARN fields that follow it."""
+
     partition: str = "aws"
     region: str = "*"
     account: str = "*"
+
+    def __post_init__(self) -> None:
+        if self.partition not in PARTITIONS:
+            raise ConfigError(f"Invalid AWS partition '{self.partition}'.")
+        if self.region != "*" and not REGION_RE.fullmatch(self.region):
+            raise ConfigError(f"Invalid AWS region '{self.region}'.")
+        if self.account != "*" and not re.fullmatch(r"\d{12}", self.account):
+            raise ConfigError(f"Invalid AWS account ID '{self.account}'.")
 
 
 def validate_name(name: str, what: str) -> str:
@@ -68,7 +86,21 @@ def kms_key_arn(key: str, ctx: ArnContext) -> str:
     return build_arn(definition, validate_name(key, "KMS key"), ctx)
 
 
+def kms_via_service(service: str, ctx: ArnContext, include_conditions: bool) -> Conditions:
+    """Condition that limits a KMS grant to requests made through one AWS service."""
+    if not include_conditions or ctx.region == "*":
+        return {}
+    return {"StringEquals": {"kms:ViaService": [f"{service}.{ctx.region}.amazonaws.com"]}}
+
+
+@lru_cache(maxsize=4096)
+def _wildcard_regex(pattern: str) -> re.Pattern[str]:
+    regex = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern)
+    return re.compile(regex, re.DOTALL)
+
+
 def iam_match(pattern: str, value: str) -> bool:
     """IAM wildcard semantics: ``*`` matches any run of characters, ``?`` exactly one."""
-    regex = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern)
-    return re.fullmatch(regex, value, re.DOTALL) is not None
+    if "*" not in pattern and "?" not in pattern:
+        return pattern == value
+    return _wildcard_regex(pattern).fullmatch(value) is not None

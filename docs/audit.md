@@ -98,8 +98,8 @@ as `fmaws validate`.
 | `IAM_POLICY_PRIVILEGE_ESCALATION` | HIGH |
 | `IAM_POLICY_SERVICE_WILDCARD` | MEDIUM; HIGH for `iam:*`, `sts:*`, `kms:*` or on `Resource: "*"` |
 | `IAM_POLICY_RESOURCE_WILDCARD` | MEDIUM |
-| `IAM_SECRETS_WILDCARD_ACCESS` (can read every secret) | HIGH |
-| `IAM_DYNAMODB_WILDCARD_ACCESS` (data access to every table) | MEDIUM |
+| `IAM_SECRETS_WILDCARD_ACCESS` (can read every secret, in any or in one Region) | HIGH; MEDIUM when conditioned |
+| `IAM_DYNAMODB_WILDCARD_ACCESS` (data access to every table) | MEDIUM; LOW when conditioned |
 | `IAM_USER_INLINE_POLICY` | LOW |
 
 A wildcard is not automatically critical. A customer managed policy that is **not attached** to

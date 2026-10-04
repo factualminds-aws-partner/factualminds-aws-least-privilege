@@ -7,7 +7,7 @@ from typing import Any
 
 from fmaws.models.finding import Finding, Severity
 from fmaws.policy import catalog
-from fmaws.policy.arns import iam_match
+from fmaws.policy.arns import PROBE, iam_match
 
 MAX_POLICY_BYTES = 1_000_000
 MANAGED_POLICY_LIMIT = 6144  # characters, whitespace excluded
@@ -25,7 +25,6 @@ _ARN_RE = re.compile(
 _ALL_ARN_RE = re.compile(r"arn:[^:]*:\*+:\*+:\*+:\*+")
 _VARIABLE_RE = re.compile(r"\$\{[^}]*\}")
 _SID_RE = re.compile(r"[A-Za-z0-9]*")
-_PROBE = "fmaws-probe-7f3a"
 # A resource part that matches two unrelated names matches everything in the service.
 _PROBES = ("a7/fmaws-probe", "zq/k/fmaws:probe-b")
 _TYPE_WIDE_RE = re.compile(r"[A-Za-z-]+[:/]\*+")
@@ -208,13 +207,14 @@ def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else [value]
 
 
-def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+def no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """JSON parsers disagree on duplicate keys, so a policy that has them is rejected."""
-    keys = [key for key, _ in pairs]
-    duplicates = sorted({key for key in keys if keys.count(key) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate key {duplicates[0]!r}")
-    return dict(pairs)
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        keys = [key for key, _ in pairs]
+        duplicate = min(key for key in result if keys.count(key) > 1)
+        raise ValueError(f"duplicate key {duplicate!r}")
+    return result
 
 
 def _reject_constant(name: str) -> Any:
@@ -231,7 +231,7 @@ def load_policy_file(path: Path) -> tuple[Any, list[Finding]]:
     try:
         text = path.read_text(encoding="utf-8")
         return json.loads(
-            text, object_pairs_hook=_no_duplicate_keys, parse_constant=_reject_constant
+            text, object_pairs_hook=no_duplicate_keys, parse_constant=_reject_constant
         ), []
     except (ValueError, RecursionError) as exc:
         return None, [_finding("POLICY_INVALID_JSON", Severity.HIGH, f"{path.name}: {exc}")]
@@ -317,14 +317,14 @@ def validate_policy_document(
             findings.append(
                 _finding(
                     "POLICY_INVALID_ACTION", Severity.HIGH, f"Invalid action {action!r}.", where
-                )  # fmt: skip
+                )
             )
         bad_resources = [r for r in resources if not isinstance(r, str) or not _valid_resource(r)]
         for resource in bad_resources:
             findings.append(
                 _finding(
                     "POLICY_INVALID_ARN", Severity.HIGH, f"Invalid resource {resource!r}.", where
-                )  # fmt: skip
+                )
             )
         if effect != "Allow":
             continue
@@ -334,7 +334,7 @@ def validate_policy_document(
         findings.extend(
             _breadth(
                 statement, good_actions, good_resources, where, wildcard_severity, star_only, scoped
-            )  # fmt: skip
+            )
         )
 
     # IAM counts characters outside of JSON whitespace; whitespace inside strings counts.
@@ -346,7 +346,7 @@ def validate_policy_document(
                 Severity.MEDIUM,
                 f"Policy is {size} characters.",
                 evidence={"size": size, "limit": MANAGED_POLICY_LIMIT},
-            )  # fmt: skip
+            )
         )
     return findings
 
@@ -376,7 +376,7 @@ def _every_iam(resource: str, kinds: tuple[str, ...]) -> bool:
     return (
         len(parts) == 6
         and iam_match(parts[2], "iam")
-        and any(iam_match(parts[5], f"{kind}/{_PROBE}") for kind in kinds)
+        and any(iam_match(parts[5], f"{kind}/{PROBE}") for kind in kinds)
     )
 
 
@@ -451,18 +451,18 @@ def _breadth(
     scoped: set[str],
 ) -> list[Finding]:
     """Checks for Allow statements that grant more than a workload plausibly needs."""
-    findings: list[Finding] = []
     condition = statement.get("Condition")
     condition = condition if isinstance(condition, dict) else {}
     # Only a well-formed condition that can evaluate to false narrows a statement.
     conditioned = bool(condition) and not trivial_condition(condition)
 
+    findings = _principal_findings(statement, conditioned, where)
     if "NotResource" in statement:
         # Everything except the listed resources is in scope: treat it as every resource,
-        # unless the exclusion itself covers everything.
-        excluded_everything = any(_every_resource(r) for r in resources)
-        all_resources = not excluded_everything
-        iam_wide = all_resources
+        # unless the exclusion itself covers everything. The listed ARNs are exclusions, so
+        # their own breadth says nothing about what is granted.
+        all_resources = not any(_every_resource(r) for r in resources)
+        any_role = any_principal = all_resources
         resources = []
         findings.append(
             _finding(
@@ -470,100 +470,98 @@ def _breadth(
                 Severity.MEDIUM,
                 "Every resource except the listed ones is in scope.",
                 where,
-            )  # fmt: skip
+            )
         )
     else:
         all_resources = any(_every_resource(r) for r in resources)
-        iam_wide = all_resources or any(_every_iam(r, _IAM_KINDS) for r in resources)
+        any_role = all_resources or any(_every_iam(r, ("role",)) for r in resources)
+        any_principal = all_resources or any(_every_iam(r, _IAM_KINDS) for r in resources)
 
-    if "NotPrincipal" in statement:
-        findings.append(
-            _finding(
-                "POLICY_PUBLIC_PRINCIPAL",
-                Severity.HIGH,
-                "Allow with NotPrincipal grants access to everyone except the listed principals.",
-                where,
-            )  # fmt: skip
-        )
-    elif _any_principal(statement.get("Principal")):
-        # fmaws cannot prove that an arbitrary condition restricts the caller, so a conditioned
-        # wildcard principal is still reported, at a lower severity.
-        findings.append(
-            _finding(
-                "POLICY_PUBLIC_PRINCIPAL",
-                Severity.MEDIUM if conditioned else Severity.CRITICAL,
-                'Principal is "*"'
-                + (
-                    ", limited only by its condition."
-                    if conditioned
-                    else " with no effective condition."
-                ),
-                where,
-            )  # fmt: skip
-        )
     if "NotAction" in statement:
-        return [
-            *findings,
+        findings.append(
             _finding(
                 "POLICY_NOT_ACTION_ALLOW",
                 Severity.HIGH,
                 "Everything except the listed actions is allowed.",
                 where,
-            ),  # fmt: skip
-        ]
-
+            )
+        )
+        return findings
     if any(_every_action(a) for a in actions):
         if all_resources and not conditioned:
-            return [
-                *findings,
+            findings.append(
                 _finding(
                     "POLICY_FULL_ADMIN",
                     Severity.CRITICAL,
                     "Every action is allowed on every resource.",
                     where,
-                ),  # fmt: skip
-            ]
-        return [
-            *findings,
-            _finding("POLICY_ACTION_WILDCARD", Severity.HIGH, "Every action is allowed.", where),
-        ]
+                )
+            )
+        else:
+            findings.append(
+                _finding("POLICY_ACTION_WILDCARD", Severity.HIGH, "Every action is allowed.", where)
+            )
+        return findings
 
+    findings += _wildcard_action_findings(actions, all_resources, wildcard_severity, where)
+    findings += _iam_findings(actions, any_role, any_principal, condition, conditioned, where)
+    if all_resources:
+        findings += _star_resource_findings(actions, star_only, scoped, where)
+    findings += _arn_findings(resources, condition, conditioned, where)
+    return findings
+
+
+def _principal_findings(statement: dict[str, Any], conditioned: bool, where: str) -> list[Finding]:
+    if "NotPrincipal" in statement:
+        problem = "Allow with NotPrincipal grants access to everyone except the listed principals."
+        return [_finding("POLICY_PUBLIC_PRINCIPAL", Severity.HIGH, problem, where)]
+    if not _any_principal(statement.get("Principal")):
+        return []
+    # fmaws cannot prove that an arbitrary condition restricts the caller, so a conditioned
+    # wildcard principal is still reported, at a lower severity.
+    if conditioned:
+        problem, severity = 'Principal is "*", limited only by its condition.', Severity.MEDIUM
+    else:
+        problem, severity = 'Principal is "*" with no effective condition.', Severity.CRITICAL
+    return [_finding("POLICY_PUBLIC_PRINCIPAL", severity, problem, where)]
+
+
+def _wildcard_action_findings(
+    actions: list[str], all_resources: bool, wildcard_severity: Severity, where: str
+) -> list[Finding]:
+    findings: list[Finding] = []
     for action in actions:
         service, name = action.lower().split(":", 1)
         sensitive = service in _SENSITIVE_SERVICES or "*" in service
         if _is_any(name):
             # Every action of a service on every resource is service-level administrator access.
+            rule = "POLICY_SERVICE_WILDCARD"
             severity = Severity.HIGH if sensitive or all_resources else wildcard_severity
-            findings.append(
-                _finding(
-                    "POLICY_SERVICE_WILDCARD",
-                    severity,
-                    f"{action} is allowed.",
-                    where,
-                    {"action": action},
-                )  # fmt: skip
-            )
         elif "*" in name or "?" in name:
+            rule = "POLICY_PARTIAL_WILDCARD"
             if sensitive:
                 severity = Severity.HIGH
-            elif all_resources:
-                severity = Severity.MEDIUM
             else:
-                severity = Severity.LOW
-            findings.append(
-                _finding(
-                    "POLICY_PARTIAL_WILDCARD",
-                    severity,
-                    f"{action} is allowed.",
-                    where,
-                    {"action": action},
-                )  # fmt: skip
-            )
+                severity = Severity.MEDIUM if all_resources else Severity.LOW
+        else:
+            continue
+        findings.append(
+            _finding(rule, severity, f"{action} is allowed.", where, {"action": action})
+        )
+    return findings
 
+
+def _iam_findings(
+    actions: list[str],
+    any_role: bool,
+    any_principal: bool,
+    condition: dict[str, Any],
+    conditioned: bool,
+    where: str,
+) -> list[Finding]:
+    """PassRole on every role, and actions that let the holder raise its own privileges."""
+    findings: list[Finding] = []
     passes_role = any(action_allows(a, "iam:PassRole") for a in actions)
-    any_role = all_resources or any(_every_iam(r, ("role",)) for r in resources)
-    if "NotResource" in statement:
-        any_role = all_resources
     if passes_role and any_role and not _restricts_passed_service(condition):
         findings.append(
             _finding(
@@ -571,92 +569,100 @@ def _breadth(
                 Severity.HIGH,
                 "iam:PassRole is allowed on every role.",
                 where,
-            )  # fmt: skip
+            )
         )
-
     escalations = sorted(
         target for target in _ESCALATION_ACTIONS if any(action_allows(a, target) for a in actions)
     )
-    if escalations and iam_wide and not conditioned:
+    if escalations and any_principal:
+        # A condition fmaws cannot evaluate lowers the severity. It never hides the finding.
+        suffix = ", limited only by its condition." if conditioned else "."
         findings.append(
             _finding(
                 "POLICY_PRIVILEGE_ESCALATION",
-                Severity.HIGH,
-                f"{', '.join(escalations)} allowed on arbitrary IAM principals.",
+                Severity.MEDIUM if conditioned else Severity.HIGH,
+                f"{', '.join(escalations)} allowed on arbitrary IAM principals{suffix}",
                 where,
                 {"actions": escalations},
-            )  # fmt: skip
-        )
-
-    if all_resources:
-        scoped_lower = {a.lower() for a in scoped}
-        star_lower = {a.lower() for a in star_only}
-        escalation_lower = {a.lower() for a in _ESCALATION_ACTIONS}
-        explicit = [a for a in actions if "*" not in a and "?" not in a]
-        scopable = sorted(a for a in explicit if a.lower() in scoped_lower)
-        unknown = sorted(
-            a
-            for a in explicit
-            if a.lower() not in scoped_lower | star_lower | escalation_lower
-            and a.lower() != "iam:passrole"
-        )
-        if scopable:
-            findings.append(
-                _finding(
-                    "POLICY_RESOURCE_WILDCARD",
-                    Severity.MEDIUM,
-                    f"{', '.join(scopable)} allowed on every resource.",
-                    where,
-                    {"actions": scopable},
-                )  # fmt: skip
             )
-        if unknown:
-            findings.append(
-                _finding(
-                    "POLICY_RESOURCE_WILDCARD_UNKNOWN",
-                    Severity.LOW,
-                    f'{", ".join(unknown)} allowed on Resource "*".',
-                    where,
-                    {"actions": unknown},
-                )  # fmt: skip
-            )
+        )
+    return findings
 
+
+def _star_resource_findings(
+    actions: list[str], star_only: dict[str, str], scoped: set[str], where: str
+) -> list[Finding]:
+    """Explicit actions on every resource: scopable ones, and ones fmaws cannot classify."""
+    scoped_lower = {a.lower() for a in scoped}
+    # Reported by their own rules, or legitimately unscoped.
+    accounted = {a.lower() for a in (*star_only, *_ESCALATION_ACTIONS, "iam:PassRole")}
+    explicit = [a for a in actions if "*" not in a and "?" not in a]
+    scopable = sorted(a for a in explicit if a.lower() in scoped_lower)
+    unknown = sorted(a for a in explicit if a.lower() not in scoped_lower | accounted)
+    findings: list[Finding] = []
+    if scopable:
+        findings.append(
+            _finding(
+                "POLICY_RESOURCE_WILDCARD",
+                Severity.MEDIUM,
+                f"{', '.join(scopable)} allowed on every resource.",
+                where,
+                {"actions": scopable},
+            )
+        )
+    if unknown:
+        findings.append(
+            _finding(
+                "POLICY_RESOURCE_WILDCARD_UNKNOWN",
+                Severity.LOW,
+                f'{", ".join(unknown)} allowed on Resource "*".',
+                where,
+                {"actions": unknown},
+            )
+        )
+    return findings
+
+
+def _arn_findings(
+    resources: list[str], condition: dict[str, Any], conditioned: bool, where: str
+) -> list[Finding]:
+    """Resource ARNs that match every resource of a service or type, or any account."""
+    findings: list[Finding] = []
     for resource in resources:
-        if _every_resource(resource):
-            continue
         parts = resource.split(":", 5)
-        type_wide = len(parts) == 6 and _TYPE_WIDE_RE.fullmatch(parts[5]) is not None
-        # "bucket/*" has the same shape but is one bucket, not every resource of a type.
-        if type_wide and parts[2] != "s3":
-            if parts[2] == "kms" and _pins_kms_alias(condition):
+        if _every_resource(resource) or len(parts) != 6:
+            continue
+        service, account, name = parts[2], parts[4], parts[5]
+        # "bucket/*" has the same shape as a type-wide ARN but is one bucket.
+        if _TYPE_WIDE_RE.fullmatch(name) and service != "s3":
+            if service == "kms" and _pins_kms_alias(condition):
                 continue  # the documented way to authorize a key by alias
+            suffix = ", limited only by its condition." if conditioned else "."
             findings.append(
                 _finding(
                     "POLICY_BROAD_RESOURCE",
                     Severity.LOW if conditioned else Severity.MEDIUM,
-                    f"{resource} matches every {parts[2]} resource of that type"
-                    + (", limited only by its condition." if conditioned else "."),
+                    f"{resource} matches every {service} resource of that type{suffix}",
                     where,
-                )  # fmt: skip
+                )
             )
-        elif len(parts) == 6 and all(iam_match(parts[5], probe) for probe in _PROBES):
+        elif all(iam_match(name, probe) for probe in _PROBES):
             # A wildcard service ("arn:aws:*:*::*") reaches far beyond one service.
-            severity = Severity.HIGH if "*" in parts[2] else Severity.MEDIUM
             findings.append(
                 _finding(
                     "POLICY_BROAD_RESOURCE",
-                    severity,
-                    f"{resource} matches every {parts[2]} resource.",
+                    Severity.HIGH if "*" in service else Severity.MEDIUM,
+                    f"{resource} matches every {service} resource.",
                     where,
-                )  # fmt: skip
+                )
             )
-        elif len(parts) == 6 and ("*" in parts[4] or "?" in parts[4]):
+        elif "*" in account or "?" in account:
             findings.append(
                 _finding(
                     "POLICY_ACCOUNT_WILDCARD",
                     Severity.LOW,
                     f"{resource} does not pin the account.",
                     where,
-                )  # fmt: skip
+                )
             )
     return findings

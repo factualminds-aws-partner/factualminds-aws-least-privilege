@@ -52,7 +52,7 @@ def render_sarif(report: Report) -> str:
     artifact = report.policy_path or DEFAULT_ARTIFACT
     rules: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
-    for finding in sorted(report.findings, key=lambda f: (-f.severity.rank, f.id, f.resource)):
+    for finding in report.sorted_findings():
         rules.setdefault(finding.id, _rule(finding))
         fingerprint = hashlib.sha256(f"{finding.id}|{finding.resource}".encode()).hexdigest()
         results.append(

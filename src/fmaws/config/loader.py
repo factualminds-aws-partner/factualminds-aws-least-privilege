@@ -116,7 +116,7 @@ def requirements_from_config(loaded: LoadedConfig) -> list[ResourceRequirement]:
             intents = tuple(raw.get("actions") or definition.default_intents)
             for intent in intents:
                 definition.actions_for(intent)
-            options = {k: raw[k] for k in ("kms_key",) if raw.get(k)}
+            options = {"kms_key": raw["kms_key"]} if raw.get("kms_key") else {}
             for name in _names(raw, definition.config_key, service):
                 requirements.append(
                     ResourceRequirement(

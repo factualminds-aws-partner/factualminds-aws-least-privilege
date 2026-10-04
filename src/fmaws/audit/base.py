@@ -12,11 +12,11 @@ from typing import Any, Protocol
 from botocore.exceptions import BotoCoreError, ClientError
 
 from fmaws.audit import policies
-from fmaws.aws.session import AWSClientProvider
+from fmaws.aws.session import EXPIRED_CODES, AWSClientProvider, error_code, read_only_manifest
 from fmaws.config.schema import Config
 from fmaws.errors import AwsAuthError, ConfigError
-from fmaws.models.finding import Finding, Severity
-from fmaws.models.report import AnalyzerStatus
+from fmaws.models.finding import Finding, Severity, finding_order
+from fmaws.models.report import COMPLETED, FAILED, SKIPPED, AnalyzerStatus
 
 # Every AWS operation the audit may call, and the IAM action it requires. Anything else is
 # refused at runtime. permissions/audit-readonly-policy.json is generated from this table.
@@ -52,12 +52,11 @@ _DENIED = {
     "AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "AuthorizationError",
     "AuthorizationErrorException", "MethodNotAllowed", "AllAccessDisabled",
 }  # fmt: skip
-_EXPIRED = {"ExpiredToken", "ExpiredTokenException", "RequestExpired"}
 # With a working identity, these mean the Region is not enabled for the account.
 _REGION = {"OptInRequired", "AuthFailure", "UnrecognizedClientException", "InvalidClientTokenId"}
 
-COMPLETED, SKIPPED, FAILED = "completed", "skipped", "failed"
 UNREADABLE = "reading a policy"
+DISABLED = "disabled in configuration"
 
 
 class AuditDenied(Exception):
@@ -76,7 +75,6 @@ class AuditContext:
     account: str
     regions: list[str]
     config: Config
-    partition: str = "aws"
     now: datetime = field(default_factory=lambda: datetime.now(UTC))
     denied: Counter[str] = field(default_factory=Counter)
     _cache: dict[str, tuple[bool, Any]] = field(default_factory=dict)
@@ -85,6 +83,15 @@ class AuditContext:
     @property
     def home_region(self) -> str:
         return self.regions[0]
+
+    @property
+    def partition(self) -> str:
+        return self.config.aws.partition
+
+    def gap(self, what: str) -> None:
+        """Record something that could not be inspected: reported as incomplete, never as clean."""
+        with self._lock:
+            self.denied[what] += 1
 
     def _client(self, service: str, operation: str, region: str | None) -> Any:
         if (service, operation) not in OPERATIONS:
@@ -96,8 +103,8 @@ class AuditContext:
         try:
             return invoke()
         except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code", "")
-            if code in _EXPIRED:
+            code = error_code(exc)
+            if code in EXPIRED_CODES:
                 raise AwsAuthError(
                     "AWS credentials expired during the audit. Refresh them and retry."
                 ) from exc
@@ -146,26 +153,18 @@ class AuditContext:
         try:
             result: dict[str, Any] = self.call(service, operation, region, **kwargs)
             return result
-        except AuditDenied as exc:
-            with self._lock:
-                self.denied[exc.permission] += 1
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code", "") in missing:
+        except (AuditDenied, ClientError, RegionUnavailable, BotoCoreError) as exc:
+            if isinstance(exc, ClientError) and error_code(exc) in missing:
                 return {}
-            with self._lock:
-                self.denied[OPERATIONS[(service, operation)]] += 1
-        except (RegionUnavailable, BotoCoreError):
-            with self._lock:
-                self.denied[OPERATIONS[(service, operation)]] += 1
-        return None
+            self.gap(OPERATIONS[(service, operation)])
+            return None
 
     def statements(self, document: Any) -> list[dict[str, Any]]:
         """Allow statements of a policy. An unreadable policy is counted, never read as empty."""
         try:
             return policies.allow_statements(document)
         except policies.UnreadablePolicy:
-            with self._lock:
-                self.denied[UNREADABLE] += 1
+            self.gap(UNREADABLE)
             return []
 
     def cached(self, key: str, factory: Callable[[], Any]) -> Any:
@@ -234,7 +233,7 @@ def resolve_regions(
 
 def _describe(exc: Exception) -> str:
     if isinstance(exc, ClientError):
-        return f"AWS returned {exc.response.get('Error', {}).get('Code', 'an error')}"
+        return f"AWS returned {error_code(exc) or 'an error'}"
     if isinstance(exc, RegionUnavailable):
         return f"Region not available ({exc})"
     return f"{type(exc).__name__}"
@@ -264,11 +263,11 @@ def _run_regional(
     )
     if len(problems) < len(ctx.regions):
         return findings, AnalyzerStatus(
-            name=analyzer.name, status=COMPLETED, detail=f"incomplete, {details}"
+            name=analyzer.name, status=COMPLETED, detail=f"incomplete, {details}", incomplete=True
         )
     denied = all(isinstance(exc, AuditDenied | RegionUnavailable) for exc in problems.values())
     return [], AnalyzerStatus(
-        name=analyzer.name, status=SKIPPED if denied else FAILED, detail=details
+        name=analyzer.name, status=SKIPPED if denied else FAILED, detail=details, incomplete=True
     )
 
 
@@ -286,9 +285,7 @@ def run_audit(ctx: AuditContext) -> tuple[list[Finding], list[AnalyzerStatus]]:
     statuses: list[AnalyzerStatus] = []
     for name, analyzer in ANALYZERS.items():
         if enabled and name not in enabled:
-            statuses.append(
-                AnalyzerStatus(name=name, status=SKIPPED, detail="disabled in configuration")
-            )
+            statuses.append(AnalyzerStatus(name=name, status=SKIPPED, detail=DISABLED))
             continue
         before = Counter(ctx.denied)
         try:
@@ -301,14 +298,21 @@ def run_audit(ctx: AuditContext) -> tuple[list[Finding], list[AnalyzerStatus]]:
         except AuditDenied as exc:
             found = []
             status = AnalyzerStatus(
-                name=name, status=SKIPPED, detail=f"missing permission {exc.permission}"
+                name=name,
+                status=SKIPPED,
+                detail=f"missing permission {exc.permission}",
+                incomplete=True,
             )
         except Exception as exc:  # noqa: BLE001  one analyzer must not abort the audit
-            found, status = [], AnalyzerStatus(name=name, status=FAILED, detail=_describe(exc))
+            found = []
+            status = AnalyzerStatus(
+                name=name, status=FAILED, detail=_describe(exc), incomplete=True
+            )
         partial = ctx.denied - before
         if partial and status.status == COMPLETED:
             gaps = ", ".join(f"{p} failed for {n} resource(s)" for p, n in sorted(partial.items()))
             status.detail = "; ".join(d for d in (status.detail, f"incomplete, {gaps}") if d)
+            status.incomplete = True
         findings.extend(found)
         statuses.append(status)
     return findings, statuses
@@ -327,25 +331,10 @@ def apply_config(findings: list[Finding], config: Config) -> tuple[list[Finding]
         if override:
             finding = finding.model_copy(update={"severity": Severity(override.upper())})
         kept.append(finding)
-    kept.sort(key=lambda f: (-f.severity.rank, f.id, f.resource))
+    kept.sort(key=finding_order)
     return kept, len(findings) - len(kept)
-
-
-def is_incomplete(status: AnalyzerStatus) -> bool:
-    """The analyzer did not look at everything, for a reason other than configuration."""
-    if status.status == FAILED:
-        return True
-    if status.status == SKIPPED:
-        return status.detail != "disabled in configuration"
-    return "incomplete" in status.detail
 
 
 def permission_manifest() -> dict[str, Any]:
     """The read-only IAM policy that lets every analyzer run."""
-    actions = sorted({*OPERATIONS.values(), "sts:GetCallerIdentity"})
-    return {
-        "Version": "2012-10-17",
-        "Statement": [
-            {"Sid": "FmawsAuditReadOnly", "Effect": "Allow", "Action": actions, "Resource": "*"}
-        ],
-    }
+    return read_only_manifest("FmawsAuditReadOnly", OPERATIONS)

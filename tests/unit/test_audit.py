@@ -1238,3 +1238,32 @@ def test_account_is_read_from_the_account_field_only():
         ["b1"], account_bpa=BPA_ON, get_bucket_policy={"b1": bucket_policy(spoof)}
     )
     assert ids(responses) == set()
+
+
+def test_a_condition_lowers_but_never_hides_wildcard_data_access():
+    condition = {"Bool": {"aws:SecureTransport": "true"}}
+    policy = doc(
+        allow("secretsmanager:GetSecretValue", f"arn:aws:secretsmanager:*:{ACCOUNT}:secret:*",
+              Condition=condition),
+        allow("dynamodb:GetItem", f"arn:aws:dynamodb:*:{ACCOUNT}:table/*", Condition=condition),
+    )  # fmt: skip
+    result = found(with_details(policies=[managed("p", policy)]))
+    assert ("IAM_SECRETS_WILDCARD_ACCESS", Severity.MEDIUM) in result
+    assert ("IAM_DYNAMODB_WILDCARD_ACCESS", Severity.LOW) in result
+
+
+def test_every_secret_of_one_region_is_still_every_secret():
+    policy = doc(allow("secretsmanager:GetSecretValue",
+                       f"arn:aws:secretsmanager:eu-west-1:{ACCOUNT}:secret:*"))  # fmt: skip
+    assert ("IAM_SECRETS_WILDCARD_ACCESS", Severity.HIGH) in found(
+        with_details(policies=[managed("p", policy)])
+    )
+
+
+def test_incomplete_flag_drives_the_gate_but_stays_out_of_the_report():
+    _, statuses, _ = run({("rds", "describe_db_instances"): error("AccessDenied")},
+                         config={"enabled_analyzers": ["rds", "s3"]})  # fmt: skip
+    by_name = {s.name: s for s in statuses}
+    assert by_name["rds"].incomplete and not by_name["s3"].incomplete
+    assert not by_name["kms"].incomplete  # disabled on purpose is not incomplete
+    assert "incomplete" not in by_name["rds"].model_dump()

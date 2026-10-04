@@ -392,3 +392,9 @@ def make(
         documentation_url=rule.url,
         confidence=confidence,
     )
+
+
+def shown(names: list[str], limit: int = 10) -> str:
+    """The first names, and how many more there are."""
+    rest = len(names) - limit
+    return ", ".join(names[:limit]) + (f" and {rest} more" if rest > 0 else "")

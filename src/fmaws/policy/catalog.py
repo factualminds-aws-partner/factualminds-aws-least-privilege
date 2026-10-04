@@ -69,11 +69,9 @@ def star_actions() -> dict[str, str]:
 
 def scoped_actions() -> set[str]:
     """All known actions that support resource-level permissions."""
-    known = {
-        "s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject",
-        "s3:DeleteObjectVersion", "s3:ListBucket", "s3:ListBucketVersions",
-        "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts", "s3:GetBucketLocation",
-    }  # fmt: skip
+    from fmaws.policy import s3  # s3 imports arns, which imports this module
+
+    known = set(s3.ACTIONS)
     for definition in CATALOG.values():
         for actions in definition.intents.values():
             known.update(a for a in actions if a not in definition.star_actions)

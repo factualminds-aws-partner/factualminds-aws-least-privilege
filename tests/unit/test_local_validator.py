@@ -391,3 +391,12 @@ def test_duplicate_json_keys_are_rejected(tmp_path):
     document, findings = load_policy_file(path)
     assert document is None and findings[0].id == "POLICY_INVALID_JSON"
     assert "duplicate key 'Action'" in findings[0].problem
+
+
+def test_a_condition_lowers_but_never_hides_privilege_escalation():
+    statement = allow(
+        "iam:AttachRolePolicy", "*", Condition={"Bool": {"aws:SecureTransport": "true"}}
+    )
+    assert ids(doc(statement))["POLICY_PRIVILEGE_ESCALATION"] is Severity.MEDIUM
+    always_true = allow("iam:AttachRolePolicy", "*", Condition={"StringLike": {"aws:userid": "*"}})
+    assert ids(doc(always_true))["POLICY_PRIVILEGE_ESCALATION"] is Severity.HIGH

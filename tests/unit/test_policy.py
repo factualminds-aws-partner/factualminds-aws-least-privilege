@@ -221,3 +221,29 @@ def test_names_with_newlines_are_rejected(name):
     with pytest.raises(ConfigError):
         statements(req("dynamodb", name, ("read",)))
     assert parse_arn(catalog.get("sqs"), "arn:aws:sqs:us-east-1:111122223333:q\n") is None
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"region": "us-east-1:999999999999"},
+        {"region": "us-east-1/*"},
+        {"region": "US-EAST-1"},
+        {"partition": "aws:x"},
+        {"account": "12345"},
+        {"account": "111122223333:table/other"},
+    ],
+)
+def test_arn_context_rejects_values_that_would_shift_or_widen_arn_fields(fields):
+    with pytest.raises(ConfigError):
+        ArnContext(**fields)
+
+
+def test_arn_context_accepts_real_regions_and_wildcards():
+    for region in ("us-east-1", "ap-southeast-2", "us-gov-west-1", "cn-north-1", "*"):
+        assert ArnContext(region=region, account="*").region == region
+
+
+def test_iam_match_without_wildcards_is_plain_equality():
+    assert iam_match("arn:aws:s3:::b/a.b", "arn:aws:s3:::b/a.b")
+    assert not iam_match("arn:aws:s3:::b/a.b", "arn:aws:s3:::b/aXb")

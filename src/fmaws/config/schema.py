@@ -18,8 +18,6 @@ class AwsConfig(BaseModel):
 
 
 class PolicyConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
     include_conditions: bool = True
     # Severity of ``service:*`` actions found by local validation.
     wildcard_action_threshold: Literal["info", "warning", "error"] = "warning"
@@ -55,8 +53,6 @@ class ThresholdConfig(BaseModel):
 
 
 class AuditConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
     # Analyzer names to run. Empty means all.
     enabled_analyzers: list[str] = Field(default_factory=list)
     regions: list[str] = Field(default_factory=list)
@@ -84,8 +80,6 @@ class AuditConfig(BaseModel):
 
 
 class ObserveConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
     # Role or user the application runs as (ARN).
     principal: str | None = None
     days: int = Field(default=30, ge=1, le=400)
@@ -96,9 +90,6 @@ class ObserveConfig(BaseModel):
 
 
 class Config(BaseModel):
-    # Sections for later phases (audit, observe) are accepted and ignored.
-    model_config = ConfigDict(extra="allow")
-
     application: ApplicationConfig = Field(default_factory=ApplicationConfig)
     aws: AwsConfig = Field(default_factory=AwsConfig)
     resources: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
@@ -106,6 +97,13 @@ class Config(BaseModel):
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     observe: ObserveConfig = Field(default_factory=ObserveConfig)
+
+    @property
+    def audit_fail_on(self) -> list[str]:
+        """Severities that fail an audit: the environment's list, else the general one."""
+        audit = self.audit
+        environment = audit.production if self.is_production else audit.non_production
+        return list(environment.fail_on or audit.fail_on)
 
     @property
     def is_production(self) -> bool:

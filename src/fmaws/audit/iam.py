@@ -12,17 +12,16 @@ from typing import Any
 
 from fmaws.audit import policies
 from fmaws.audit.base import UNREADABLE, AuditContext, register
-from fmaws.audit.findings import make
+from fmaws.audit.findings import RULES, make
 from fmaws.models.finding import Finding, Severity
 from fmaws.models.requirement import Confidence
-from fmaws.policy.arns import iam_match
+from fmaws.policy.arns import PROBE, iam_match
 from fmaws.validators.local import validate_policy_document
 
 ROOT = "<root_account>"
 _REPORT_ATTEMPTS = 15
 _SERVICE_LINKED = "/aws-service-role/"
 _SSO_MANAGED = "/aws-reserved/"
-_PROBE = "fmaws-probe-7f3a"
 
 # Local validator finding -> audit rule.
 _BREADTH = {
@@ -87,7 +86,7 @@ class IamRoot:
         try:
             root = next((r for r in credential_report(ctx) if r.get("user") == ROOT), {})
         except Exception:  # noqa: BLE001  the report is optional here; iam_credentials reports it
-            ctx.denied["iam:GetCredentialReport"] += 1
+            ctx.gap("iam:GetCredentialReport")
 
         # Member accounts under centralized root access have no root password at all.
         no_root_password = root.get("password_enabled") == "false"
@@ -154,7 +153,7 @@ class IamCredentials:
                             arn,
                             f"Access key {number} is active, {age} days old and {last}.",
                             evidence=evidence,
-                        )  # fmt: skip
+                        )
                     )
                     continue
                 key_recently_used = True
@@ -166,7 +165,7 @@ class IamCredentials:
                             f"Access key {number} is {age} days old (limit {max_age}). "
                             "Workloads should use roles instead of long-lived keys.",
                             evidence=evidence,
-                        )  # fmt: skip
+                        )
                     )
             if console and not key_recently_used:
                 last_login = ctx.days_since(_when(row.get("password_last_used")))
@@ -179,13 +178,41 @@ class IamCredentials:
                             arn,
                             f"Last console sign-in: {seen}.",
                             evidence={"days_since_sign_in": last_login},
-                        )  # fmt: skip
+                        )
                     )
         return findings
 
 
-def _all_of(statement: dict[str, Any], probe_arn: str) -> bool:
-    return any(iam_match(r, probe_arn) for r in policies.resources(statement))
+def _reaches_every(statement: dict[str, Any], service: str, name: str) -> bool:
+    """Does a resource of the statement match an arbitrary resource of that service and type?
+
+    Region and account are ignored on purpose: every secret of one Region is still every secret.
+    """
+    for resource in policies.resources(statement):
+        parts = resource.split(":", 5)
+        if resource == "*" or (
+            len(parts) == 6 and iam_match(parts[2], service) and iam_match(parts[5], name)
+        ):
+            return True
+    return False
+
+
+# rule -> (actions, service, resource name of an arbitrary resource, problem)
+_DATA_WILDCARDS = {
+    "IAM_SECRETS_WILDCARD_ACCESS": (
+        ("secretsmanager:GetSecretValue",),
+        "secretsmanager",
+        f"secret:{PROBE}",
+        "secretsmanager:GetSecretValue is allowed on every secret.",
+    ),
+    "IAM_DYNAMODB_WILDCARD_ACCESS": (
+        _DYNAMODB_DATA,
+        "dynamodb",
+        f"table/{PROBE}",
+        "DynamoDB data actions are allowed on every table.",
+    ),
+}
+_ONE_STEP_LOWER = {Severity.HIGH: Severity.MEDIUM, Severity.MEDIUM: Severity.LOW}
 
 
 def policy_findings(
@@ -194,9 +221,9 @@ def policy_findings(
     """Breadth findings for one identity policy, one finding per rule."""
     try:
         document = policies.parse(document)
-        policies.allow_statements(document)
+        statements = policies.allow_statements(document)
     except policies.UnreadablePolicy:
-        ctx.denied[UNREADABLE] += 1
+        ctx.gap(UNREADABLE)
         return []
     findings: list[Finding] = []
     note = "" if attached else " The policy is not attached to any principal."
@@ -208,43 +235,35 @@ def policy_findings(
         worst = max(items, key=lambda f: f.severity.rank).severity
         severity = min(worst, Severity.HIGH, key=lambda s: s.rank) if attached else Severity.LOW
         problems = sorted({f"{f.resource}: {f.problem}" for f in items})
+        statement_labels = sorted({f.resource for f in items})
         findings.append(
             make(
                 rule_id,
                 resource,
                 " ".join(problems) + note,
                 severity=severity,
-                evidence={"statements": sorted({f.resource for f in items})},
-            )  # fmt: skip
+                evidence={"statements": statement_labels},
+            )
         )
 
-    secret = f"arn:aws:secretsmanager:us-east-1:{ctx.account}:secret:{_PROBE}"
-    table = f"arn:aws:dynamodb:us-east-1:{ctx.account}:table/{_PROBE}"
-    for statement in policies.allow_statements(document):
-        if policies.is_conditioned(statement) or policies.allows(statement, f"{_PROBE}:{_PROBE}"):
-            continue  # conditioned, or full admin which is already reported above
-        if policies.allows(statement, "secretsmanager:GetSecretValue") and _all_of(
-            statement, secret
-        ):
-            findings.append(
-                make(
-                    "IAM_SECRETS_WILDCARD_ACCESS",
-                    resource,
-                    "secretsmanager:GetSecretValue is allowed on every secret." + note,
-                    severity=None if attached else Severity.LOW,
-                )  # fmt: skip
-            )
-        if policies.allows(statement, *_DYNAMODB_DATA) and _all_of(statement, table):
-            findings.append(
-                make(
-                    "IAM_DYNAMODB_WILDCARD_ACCESS",
-                    resource,
-                    "DynamoDB data actions are allowed on every table." + note,
-                    severity=None if attached else Severity.LOW,
-                )  # fmt: skip
-            )
-    unique = {f.id: f for f in findings}
-    return list(unique.values())
+    # Full admin is already reported above.
+    eligible = [s for s in statements if not policies.allows(s, f"{PROBE}:{PROBE}")]
+    for rule_id, (actions, service, name, problem) in _DATA_WILDCARDS.items():
+        hits = [
+            s for s in eligible if policies.allows(s, *actions) and _reaches_every(s, service, name)
+        ]
+        if not hits:
+            continue
+        # A condition fmaws cannot evaluate lowers the severity. It never hides the finding.
+        conditioned = all(policies.is_conditioned(s) for s in hits)
+        default = RULES[rule_id].severity
+        if not attached:
+            severity = Severity.LOW
+        else:
+            severity = _ONE_STEP_LOWER[default] if conditioned else default
+        limited = " Limited only by a condition fmaws cannot verify." if conditioned else ""
+        findings.append(make(rule_id, resource, problem + limited + note, severity=severity))
+    return findings
 
 
 class IamPolicies:
@@ -300,7 +319,7 @@ class IamPolicies:
                             arn,
                             f"AdministratorAccess is attached to this {kind}.",
                             severity=severity,
-                        )  # fmt: skip
+                        )
                     )
         return findings
 
@@ -334,7 +353,7 @@ class IamRoles:
                                 else " with no condition."
                             ),
                             severity=Severity.MEDIUM if conditioned else None,
-                        )  # fmt: skip
+                        )
                     )
                 accounts = policies.external_accounts(statement, ctx.account, trusted)
                 if accounts:
@@ -350,7 +369,7 @@ class IamRoles:
                             arn,
                             f"Any identity of {oidc[0].split('oidc-provider/')[-1]} can assume "
                             "the role: the trust policy has no condition on the subject claim.",
-                        )  # fmt: skip
+                        )
                     )
             if external:
                 findings.append(
@@ -361,7 +380,7 @@ class IamRoles:
                         + ("" if guarded else " No sts:ExternalId or organization condition."),
                         severity=Severity.LOW if guarded else None,
                         evidence={"accounts": sorted(external)},
-                    )  # fmt: skip
+                    )
                 )
             if path.startswith(_SSO_MANAGED):
                 continue
@@ -376,7 +395,7 @@ class IamRoles:
                         f"Last used: {seen}.",
                         evidence={"days_since_last_use": idle},
                         confidence=Confidence.MEDIUM,
-                    )  # fmt: skip
+                    )
                 )
         return findings
 

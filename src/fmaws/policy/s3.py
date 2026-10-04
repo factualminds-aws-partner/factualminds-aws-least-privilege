@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from fmaws.errors import ConfigError
 from fmaws.models.policy import Conditions, Explanation, Statement
 from fmaws.models.requirement import ResourceRequirement
-from fmaws.policy.arns import ArnContext, kms_key_arn
+from fmaws.policy.arns import ArnContext, kms_key_arn, kms_via_service
 
 BUCKET_RE = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 INTENTS = ("read", "write", "delete", "list")
@@ -29,6 +29,18 @@ _VERSIONED_OBJECT_ACTIONS = {
 # Needed to abort and to resume/complete multipart uploads. Initiating, uploading parts and
 # completing are all authorized by s3:PutObject.
 _MULTIPART_ACTIONS = ("s3:AbortMultipartUpload", "s3:ListMultipartUploadParts")
+_LIST, _LIST_VERSIONS, _LOCATION = "s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation"
+# Every action this engine can emit. All of them support resource-level permissions.
+ACTIONS = frozenset(
+    {
+        *(a for actions in _OBJECT_ACTIONS.values() for a in actions),
+        *(a for actions in _VERSIONED_OBJECT_ACTIONS.values() for a in actions),
+        *_MULTIPART_ACTIONS,
+        _LIST,
+        _LIST_VERSIONS,
+        _LOCATION,
+    }
+)
 
 
 def bucket_name(value: str) -> str:
@@ -108,9 +120,9 @@ def build_bucket(
             if multipart and "write" in req.intents:
                 entry.object_actions.update(_MULTIPART_ACTIONS)
             if "list" in req.intents:
-                entry.list_actions.add("s3:ListBucket")
+                entry.list_actions.add(_LIST)
                 if versioned:
-                    entry.list_actions.add("s3:ListBucketVersions")
+                    entry.list_actions.add(_LIST_VERSIONS)
             entry.explanations.append(
                 Explanation(
                     reason=f"{req.reason}: {', '.join(sorted(req.intents))} on "
@@ -175,7 +187,7 @@ def build_bucket(
     if any(req.options.get("bucket_location") for req in reqs):
         statements.append(
             Statement(
-                actions=("s3:GetBucketLocation",),
+                actions=(_LOCATION,),
                 resources=(bucket_arn,),
                 conditions=dict(base),
                 explanations=explain(everything),
@@ -205,9 +217,7 @@ def _kms_statement(
         if multipart_write:
             # Uploading parts of an SSE-KMS multipart upload decrypts the data key.
             actions.add("kms:Decrypt")
-    conditions: Conditions = {}
-    if include_conditions and ctx.region != "*":
-        conditions = {"StringEquals": {"kms:ViaService": [f"s3.{ctx.region}.amazonaws.com"]}}
+    conditions = kms_via_service("s3", ctx, include_conditions)
     confidence = min((e.confidence for e in explanations), key=lambda c: c.rank)
     return Statement(
         actions=tuple(sorted(actions)),

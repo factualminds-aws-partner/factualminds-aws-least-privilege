@@ -41,7 +41,7 @@ The command exits 1 when there is at least one error.
 | `POLICY_NOT_ACTION_ALLOW` | HIGH | `Allow` with `NotAction` |
 | `POLICY_NOT_RESOURCE_ALLOW` | MEDIUM | `Allow` with `NotResource`. The statement is then checked as if it applied to every resource |
 | `POLICY_PASSROLE_BROAD` | HIGH | `iam:PassRole` on every role without a restricting `iam:PassedToService` |
-| `POLICY_PRIVILEGE_ESCALATION` | HIGH | `iam:AttachRolePolicy`, `iam:PutUserPolicy`, `iam:CreateAccessKey`, `sts:AssumeRole` and similar on arbitrary users, roles, groups or policies |
+| `POLICY_PRIVILEGE_ESCALATION` | HIGH; MEDIUM when conditioned | `iam:AttachRolePolicy`, `iam:PutUserPolicy`, `iam:CreateAccessKey`, `sts:AssumeRole` and similar on arbitrary users, roles, groups or policies |
 | `POLICY_RESOURCE_WILDCARD` | MEDIUM | Actions that support resource-level permissions on `Resource: "*"` |
 | `POLICY_RESOURCE_WILDCARD_UNKNOWN` | LOW | `Resource: "*"` on actions outside the fmaws catalog |
 | `POLICY_BROAD_RESOURCE` | MEDIUM; HIGH for a wildcard service; LOW when conditioned | Every resource of a service or of a type (`table/*`). `key/*` pinned with `kms:ResourceAliases` is accepted |

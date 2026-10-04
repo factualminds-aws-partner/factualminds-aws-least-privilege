@@ -5,7 +5,7 @@ from typing import Any
 
 from fmaws.audit import policies
 from fmaws.audit.base import AuditContext, register
-from fmaws.audit.findings import make
+from fmaws.audit.findings import make, shown
 from fmaws.models.finding import Finding, Severity
 
 _BPA_FLAGS = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")
@@ -47,36 +47,33 @@ class S3:
         ).get("PublicAccessBlockConfiguration", {})
 
         findings: list[Finding] = []
-        account_blocks_all = all(account_bpa.get(flag) for flag in _BPA_FLAGS)
-        if not account_blocks_all:
-            off = [flag for flag in _BPA_FLAGS if not account_bpa.get(flag)]
+        off = [flag for flag in _BPA_FLAGS if not account_bpa.get(flag)]
+        if off:
             findings.append(
                 make(
                     "S3_ACCOUNT_BPA_DISABLED",
                     f"arn:{ctx.partition}:s3:::*",
                     f"Not enabled at account level: {', '.join(off)}.",
                     evidence={"disabled": off},
-                )  # fmt: skip
+                )
             )
 
         aggregated: dict[str, list[str]] = {rule: [] for rule in _AGGREGATED}
-        results = ctx.map(lambda name: self._bucket(ctx, name, account_bpa), sorted(buckets))
-        for name, (found, flags) in zip(sorted(buckets), results, strict=True):
+        buckets.sort()
+        results = ctx.map(lambda name: self._bucket(ctx, name, account_bpa), buckets)
+        for name, (found, flags) in zip(buckets, results, strict=True):
             findings.extend(found)
             for rule in flags:
                 aggregated[rule].append(name)
         for rule, names in aggregated.items():
             if names:
-                shown = ", ".join(names[:10]) + (
-                    f" and {len(names) - 10} more" if len(names) > 10 else ""
-                )
                 findings.append(
                     make(
                         rule,
                         f"{len(names)} bucket(s)",
-                        f"Affected: {shown}.",
+                        f"Affected: {shown(names)}.",
                         evidence={"buckets": names},
-                    )  # fmt: skip
+                    )
                 )
         return findings
 
@@ -110,9 +107,10 @@ class S3:
         conditioned = False
         external: dict[str, bool] = {}  # account -> can change data
         for statement in ctx.statements(policy):
-            modifies = policies.allows(statement, *_WRITE, *_DELETE)
+            writes = policies.allows(statement, *_WRITE)
+            deletes = policies.allows(statement, *_DELETE)
             for account in policies.external_accounts(statement, ctx.account, trusted):
-                external[account] = external.get(account, False) or modifies
+                external[account] = external.get(account, False) or writes or deletes
             if not policies.is_public(statement) or policies.is_restricted(statement):
                 continue
             if policies.is_conditioned(statement):
@@ -121,8 +119,6 @@ class S3:
             if blocked("RestrictPublicBuckets"):
                 overridden = True
                 continue
-            writes = policies.allows(statement, *_WRITE)
-            deletes = policies.allows(statement, *_DELETE)
             if writes:
                 public.add("write")
             if deletes:
@@ -162,7 +158,7 @@ class S3:
                     "S3_PUBLIC_READ_INTENTIONAL" if intentional else "S3_PUBLIC_READ",
                     arn,
                     "Anyone can read or list objects in this bucket.",
-                )  # fmt: skip
+                )
             )
         if overridden and not public:
             findings.append(
@@ -171,7 +167,7 @@ class S3:
                     arn,
                     "The bucket policy or ACL grants public access; Block Public Access "
                     "currently overrides it.",
-                )  # fmt: skip
+                )
             )
         if conditioned:
             findings.append(
@@ -179,7 +175,7 @@ class S3:
                     "S3_WILDCARD_PRINCIPAL_CONDITIONED",
                     arn,
                     'A statement allows Principal "*" limited only by its condition.',
-                )  # fmt: skip
+                )
             )
         if external:
             writers = sorted(a for a, modifies in external.items() if modifies)
@@ -191,7 +187,7 @@ class S3:
                     + (f" Can modify data: {', '.join(writers)}." if writers else " Read only."),
                     severity=None if writers else Severity.LOW,
                     evidence={"accounts": sorted(external)},
-                )  # fmt: skip
+                )
             )
         if encryption == {}:
             findings.append(

@@ -8,6 +8,7 @@ import functools
 import json
 import sys
 from collections.abc import Callable
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
@@ -16,21 +17,22 @@ import typer
 
 from fmaws import __version__
 from fmaws import observe as observation
-from fmaws.audit.base import AuditContext, apply_config, is_incomplete, resolve_regions, run_audit
+from fmaws.audit.base import AuditContext, apply_config, resolve_regions, run_audit
 from fmaws.audit.scoring import scores
 from fmaws.aws.session import AWSClientProvider
 from fmaws.config.loader import load_config
+from fmaws.config.schema import Config
 from fmaws.errors import AwsAuthError, ConfigError, FmawsError
 from fmaws.models.finding import Severity
 from fmaws.models.policy import Explanation, Statement
-from fmaws.models.report import Report, status
+from fmaws.models.report import COMPLETED, Report, status
 from fmaws.models.requirement import Confidence
 from fmaws.pipeline import WILDCARD_SEVERITY, GenerateOptions, exit_code, run_generate
 from fmaws.policy import catalog
 from fmaws.reporters.base import render
 from fmaws.utils.redact import mask_account, redact
 from fmaws.validators.access_analyzer import FALLBACK_REGION, validate_with_access_analyzer
-from fmaws.validators.local import load_policy_file, validate_policy_document
+from fmaws.validators.local import as_list, load_policy_file, validate_policy_document
 
 app = typer.Typer(
     name="fmaws",
@@ -63,6 +65,22 @@ FormatOpt = Annotated[Format, typer.Option("--format", help="Report format.")]
 
 def emit(text: str) -> None:
     typer.echo(redact(text), nl=not text.endswith("\n"))
+
+
+def _provider(settings: Config, profile: str | None, region: str | None) -> AWSClientProvider:
+    return AWSClientProvider(profile or settings.aws.profile, region or settings.aws.region)
+
+
+def _require_file(path: Path) -> None:
+    if not path.is_file():
+        raise FmawsError(f"Policy file {path} does not exist.")
+
+
+def _write(path: Path, text: str) -> None:
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise FmawsError(f"Cannot write {path}: {exc.strerror}.") from exc
 
 
 def handle_errors(command: Callable[..., None]) -> Callable[..., None]:
@@ -127,12 +145,9 @@ def generate(
     report, policy = run_generate(options)
     report.show_explanations = explain
     if policy is not None:
-        try:
-            output.write_text(redact(policy.to_json()), encoding="utf-8")
-        except OSError as exc:
-            raise FmawsError(f"Cannot write {output}: {exc.strerror}.") from exc
+        _write(output, redact(policy.to_json()))
         report.policy_path = str(output)
-    emit(render(report, fmt.value))
+    emit(render(report, fmt))
     raise typer.Exit(exit_code(report, strict))
 
 
@@ -151,12 +166,10 @@ def _explain_file(path: Path) -> Report:
             for action in actions:
                 known.setdefault(action, f"{intent} access to a {definition.title}")
     star = catalog.star_actions()
-    raw = document.get("Statement", [])
-    for index, item in enumerate(raw if isinstance(raw, list) else [raw]):
+    for index, item in enumerate(as_list(document.get("Statement", []))):
         if not isinstance(item, dict) or "Action" not in item or "Resource" not in item:
             continue
-        names = item["Action"] if isinstance(item["Action"], list) else [item["Action"]]
-        resources = item["Resource"] if isinstance(item["Resource"], list) else [item["Resource"]]
+        names, resources = as_list(item["Action"]), as_list(item["Resource"])
         explanations = []
         for action in map(str, names):
             if action in star:
@@ -202,8 +215,7 @@ def explain(
 ) -> None:
     """Explain why each permission exists: reason, source and confidence."""
     if policy_file is not None:
-        if not policy_file.is_file():
-            raise FmawsError(f"Policy file {policy_file} does not exist.")
+        _require_file(policy_file)
         report = _explain_file(policy_file)
     else:
         options = GenerateOptions(
@@ -212,7 +224,7 @@ def explain(
         report, _ = run_generate(options)
         report.command = "explain"
     report.show_explanations = True
-    emit(render(report, fmt.value))
+    emit(render(report, fmt))
 
 
 @app.command()
@@ -228,8 +240,7 @@ def validate(
     fmt: FormatOpt = Format.console,
 ) -> None:
     """Validate an IAM policy locally and with IAM Access Analyzer."""
-    if not policy_file.is_file():
-        raise FmawsError(f"Policy file {policy_file} does not exist.")
+    _require_file(policy_file)
     settings = load_config(Path.cwd(), config).config
     report = Report(command="validate", policy_path=str(policy_file))
     document, findings = load_policy_file(policy_file)
@@ -248,7 +259,7 @@ def validate(
     elif not structurally_valid:
         report.aws_validation = "SKIPPED (policy could not be parsed)"
     else:
-        provider = AWSClientProvider(profile or settings.aws.profile, region or settings.aws.region)
+        provider = _provider(settings, profile, region)
         try:
             remote = validate_with_access_analyzer(
                 provider, policy_file.read_text(encoding="utf-8")
@@ -256,11 +267,11 @@ def validate(
         except AwsAuthError as exc:
             # Local results are still worth showing before the auth failure ends the run.
             report.aws_validation = "FAILED TO RUN"
-            emit(render(report, fmt.value))
+            emit(render(report, fmt))
             raise AwsAuthError(f"{exc} Use --local-only to validate without AWS.") from exc
         report.aws_validation = status(remote)
         report.findings.extend(remote)
-    emit(render(report, fmt.value))
+    emit(render(report, fmt))
     raise typer.Exit(exit_code(report))
 
 
@@ -269,7 +280,7 @@ def validate(
 def doctor(profile: ProfileOpt = None, region: RegionOpt = None) -> None:
     """Check AWS authentication, identity, region and the permissions fmaws uses."""
     settings = load_config(Path.cwd()).config
-    provider = AWSClientProvider(profile or settings.aws.profile, region or settings.aws.region)
+    provider = _provider(settings, profile, region)
     lines: list[str] = []
 
     def check(label: str, state: str, detail: str) -> None:
@@ -342,10 +353,10 @@ def audit(
 ) -> None:
     """Read-only security audit of the AWS account. Nothing is changed."""
     settings = load_config(Path.cwd(), config).config
-    provider = AWSClientProvider(profile or settings.aws.profile, region or settings.aws.region)
+    provider = _provider(settings, profile, region)
     identity = provider.identity()
     regions = resolve_regions(provider, settings, region, all_regions)
-    ctx = AuditContext(provider, identity["account"], regions, settings, settings.aws.partition)
+    ctx = AuditContext(provider, identity["account"], regions, settings)
 
     raw, statuses = run_audit(ctx)
     findings, ignored = apply_config(raw, settings)
@@ -360,29 +371,21 @@ def audit(
             "region": ", ".join(regions) if len(regions) <= 3 else f"{len(regions)} Regions",
         },
     )
-    emit(render(report, fmt.value))
+    emit(render(report, fmt))
 
-    ran = [s for s in statuses if s.status == "completed"]
+    ran = [s for s in statuses if s.status == COMPLETED]
     if not ran:
         raise AwsAuthError(
             "No analyzer could run. Attach permissions/audit-readonly-policy.json "
             "(see docs/required-aws-permissions.md)."
         )
-    audit_settings = settings.audit
-    environment = (
-        audit_settings.production if settings.is_production else audit_settings.non_production
-    )
-    configured = environment.fail_on or audit_settings.fail_on
-    threshold = (
-        Severity(fail_on.value.upper())
-        if fail_on
-        else min((Severity(s.upper()) for s in configured), key=lambda s: s.rank, default=None)
-    )
+    names = [fail_on.value] if fail_on else settings.audit_fail_on
+    threshold = min((Severity(n.upper()) for n in names), key=lambda s: s.rank, default=None)
     if threshold is None:
         return
     if any(f.severity.rank >= threshold.rank for f in findings):
         raise typer.Exit(1)
-    incomplete = [s.name for s in statuses if is_incomplete(s)]
+    incomplete = [s.name for s in statuses if s.incomplete]
     if incomplete and not allow_partial:
         # A gate must not pass on an audit that did not look everywhere.
         raise FmawsError(
@@ -442,8 +445,7 @@ def observe(
     declared: set[str] = set()
     notes: list[str] = []
     if policy_file is not None:
-        if not policy_file.is_file():
-            raise FmawsError(f"Policy file {policy_file} does not exist.")
+        _require_file(policy_file)
         candidate, problems = load_policy_file(policy_file)
         if problems or not isinstance(candidate, dict):
             raise ConfigError(f"{policy_file} is not a readable IAM policy.")
@@ -461,21 +463,21 @@ def observe(
         declared = {s.sid for s in policy.statements if s.confidence is Confidence.HIGH}
         notes.extend(generated.notes)
 
-    provider = AWSClientProvider(profile or settings.aws.profile, region or settings.aws.region)
+    provider = _provider(settings, profile, region)
     identity = provider.identity()
     arn = observation.principal_arn(target, identity["account"], settings.aws.partition)
     evidence = observation.Evidence()
     observation.last_accessed(provider, arn, evidence)
-    start, end = observation.window(period)
+    end = datetime.now(UTC)
+    start = observation.window(period, end)
     if cloudtrail or settings.observe.cloudtrail:
-        lookup_start, _ = observation.window(min(period, 90))
+        lookup_start = observation.window(min(period, 90), end)
         observation.cloudtrail_events(
             provider, arn, evidence, lookup_start, end, region or settings.aws.region,
             max_events or settings.observe.max_events,
         )  # fmt: skip
     if observed_policy is not None:
-        if not observed_policy.is_file():
-            raise FmawsError(f"Policy file {observed_policy} does not exist.")
+        _require_file(observed_policy)
         document, problems = load_policy_file(observed_policy)
         if problems:
             raise ConfigError(f"{observed_policy} is not a readable IAM policy.")
@@ -506,9 +508,6 @@ def observe(
         },
     )
     if output is not None:
-        try:
-            output.write_text(json.dumps(recommended, indent=2) + "\n", encoding="utf-8")
-        except OSError as exc:
-            raise FmawsError(f"Cannot write {output}: {exc.strerror}.") from exc
+        _write(output, json.dumps(recommended, indent=2) + "\n")
         report.policy_path = str(output)
-    emit(render(report, fmt.value))
+    emit(render(report, fmt))

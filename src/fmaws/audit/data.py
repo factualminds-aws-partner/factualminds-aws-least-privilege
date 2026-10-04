@@ -4,7 +4,7 @@ from typing import Any
 
 from fmaws.audit import policies
 from fmaws.audit.base import AuditContext, register
-from fmaws.audit.findings import make
+from fmaws.audit.findings import make, shown
 from fmaws.audit.network import port_open
 from fmaws.models.finding import Finding, Severity
 from fmaws.models.requirement import Confidence
@@ -28,14 +28,13 @@ class Secrets:
         )
         if not names:
             return []
-        shown = ", ".join(names[:10]) + (f" and {len(names) - 10} more" if len(names) > 10 else "")
         return [
             make(
                 "SECRETS_ROTATION_DISABLED",
                 f"{len(names)} secret(s) in {region}",
-                f"Rotation is not configured for: {shown}.",
+                f"Rotation is not configured for: {shown(names)}.",
                 evidence={"secrets": names},
-            )  # fmt: skip
+            )
         ]
 
 
@@ -74,7 +73,7 @@ class Kms:
                         "KMS_KEY_PUBLIC",
                         arn,
                         'The key policy allows Principal "*" with no restricting condition.',
-                    )  # fmt: skip
+                    )
                 )
             elif conditioned:
                 findings.append(
@@ -82,7 +81,7 @@ class Kms:
                         "KMS_KEY_WILDCARD_PRINCIPAL_CONDITIONED",
                         arn,
                         'The key policy allows Principal "*" limited only by its condition.',
-                    )  # fmt: skip
+                    )
                 )
             if external:
                 admins = sorted(a for a, is_admin in external.items() if is_admin)
@@ -98,7 +97,7 @@ class Kms:
                         ),
                         severity=Severity.HIGH if admins else None,
                         evidence={"accounts": sorted(external)},
-                    )  # fmt: skip
+                    )
                 )
         return findings
 
@@ -135,7 +134,7 @@ class Rds:
                             "The instance is publicly accessible. Its security groups could not "
                             "be read.",
                             confidence=Confidence.MEDIUM,
-                        )  # fmt: skip
+                        )
                     )
                 else:
                     exposed = port is not None and any(
@@ -148,7 +147,7 @@ class Rds:
                                 "RDS_PUBLIC_OPEN",
                                 arn,
                                 f"Publicly accessible and port {port} is open to the internet.",
-                            )  # fmt: skip
+                            )
                         )
                     else:
                         findings.append(
@@ -157,7 +156,7 @@ class Rds:
                                 arn,
                                 "The instance has a public endpoint; its security groups "
                                 "currently restrict the source.",
-                            )  # fmt: skip
+                            )
                         )
             if not instance.get("StorageEncrypted"):
                 if instance.get("PubliclyAccessible"):
@@ -173,7 +172,7 @@ class Rds:
                         f"Storage of this {instance.get('Engine', 'database')} instance is not "
                         "encrypted.",
                         severity=severity,
-                    )  # fmt: skip
+                    )
                 )
         return findings
 

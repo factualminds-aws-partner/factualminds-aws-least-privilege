@@ -1,12 +1,14 @@
 """Reporter registry. A reporter turns a Report into text; the CLI redacts and prints it."""
 
 from collections.abc import Callable
+from importlib import import_module
 
 from fmaws.errors import ConfigError
-from fmaws.models.report import Report
+from fmaws.models.report import MISSING, UNKNOWN, UNUSED, USED, Report
 
 Reporter = Callable[[Report], str]
 REPORTERS: dict[str, Reporter] = {}
+FORMATS = ("console", "json", "markdown", "sarif")
 
 CANDIDATE_NOTICE = (
     "This is a candidate policy derived from configuration and static analysis. It cannot "
@@ -21,10 +23,10 @@ UNUSED_NOTICE = (
     "window. Unknown means no evidence source can tell either way."
 )
 OBSERVE_LABELS = (
-    ("POTENTIALLY MISSING", "Potentially missing permission"),
-    ("UNUSED", "Unused permission"),
-    ("UNKNOWN", "Unknown permission"),
-    ("USED", "Used permission"),
+    (MISSING, "Potentially missing permission"),
+    (UNUSED, "Unused permission"),
+    (UNKNOWN, "Unknown permission"),
+    (USED, "Used permission"),
 )
 
 
@@ -37,8 +39,7 @@ def register(name: str) -> Callable[[Reporter], Reporter]:
 
 
 def render(report: Report, fmt: str) -> str:
-    from fmaws.reporters import console, json, markdown, sarif  # noqa: F401  (registers)
-
-    if fmt not in REPORTERS:
-        raise ConfigError(f"Unknown format '{fmt}'. Supported: {', '.join(sorted(REPORTERS))}.")
+    if fmt not in FORMATS:
+        raise ConfigError(f"Unknown format '{fmt}'. Supported: {', '.join(FORMATS)}.")
+    import_module(f"fmaws.reporters.{fmt}")  # registers the reporter; only the one needed
     return REPORTERS[fmt](report)

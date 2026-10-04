@@ -9,7 +9,13 @@ import json
 import re
 from typing import Any
 
-from fmaws.validators.local import action_allows, as_list, condition_values, trivial_condition
+from fmaws.validators.local import (
+    action_allows,
+    as_list,
+    condition_values,
+    no_duplicate_keys,
+    trivial_condition,
+)
 
 # Condition keys that tie a wildcard principal to a network, an organization or an account.
 # AWS itself treats a policy with a fixed value for one of these as not public.
@@ -50,13 +56,6 @@ class UnreadablePolicy(ValueError):
     """The policy could not be parsed unambiguously, so nothing can be concluded from it."""
 
 
-def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    keys = [key for key, _ in pairs]
-    if len(set(keys)) != len(keys):
-        raise UnreadablePolicy("duplicate keys")
-    return dict(pairs)
-
-
 def parse(document: Any) -> dict[str, Any]:
     """A policy as a dict, whether AWS returned it as JSON text or already decoded.
 
@@ -67,7 +66,7 @@ def parse(document: Any) -> dict[str, Any]:
         return {}
     if isinstance(document, str):
         try:
-            document = json.loads(document, object_pairs_hook=_no_duplicate_keys)
+            document = json.loads(document, object_pairs_hook=no_duplicate_keys)
         except (ValueError, RecursionError) as exc:
             raise UnreadablePolicy(str(exc)) from exc
     if not isinstance(document, dict):

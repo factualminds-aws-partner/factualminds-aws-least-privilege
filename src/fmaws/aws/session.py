@@ -2,8 +2,6 @@
 
 from typing import Any
 
-import boto3
-from botocore.config import Config
 from botocore.exceptions import (
     BotoCoreError,
     ClientError,
@@ -17,14 +15,29 @@ from botocore.exceptions import (
 
 from fmaws import __version__
 from fmaws.errors import AwsAuthError, FmawsError
+from fmaws.models.policy import POLICY_VERSION
 
 _AUTH_CODES = {
     "AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "AuthFailure",
     "ExpiredToken", "ExpiredTokenException", "RequestExpired", "InvalidClientTokenId",
     "UnrecognizedClientException", "SignatureDoesNotMatch", "InvalidSignatureException",
 }  # fmt: skip
-_EXPIRED_CODES = {"ExpiredToken", "ExpiredTokenException", "RequestExpired"}
+EXPIRED_CODES = {"ExpiredToken", "ExpiredTokenException", "RequestExpired"}
 _THROTTLE_CODES = {"Throttling", "ThrottlingException", "TooManyRequestsException"}
+
+
+def error_code(exc: ClientError) -> str:
+    code: str = exc.response.get("Error", {}).get("Code", "")
+    return code
+
+
+def read_only_manifest(sid: str, operations: dict[tuple[str, str], str]) -> dict[str, Any]:
+    """The IAM policy that allows exactly the operations of an allow-list."""
+    actions = sorted({*operations.values(), "sts:GetCallerIdentity"})
+    return {
+        "Version": POLICY_VERSION,
+        "Statement": [{"Sid": sid, "Effect": "Allow", "Action": actions, "Resource": "*"}],
+    }
 
 
 def translate(exc: Exception, doing: str) -> FmawsError:
@@ -41,8 +54,8 @@ def translate(exc: Exception, doing: str) -> FmawsError:
             f"The AWS SSO session is missing or expired while {doing}. Run: aws sso login"
         )
     if isinstance(exc, ClientError):
-        code = exc.response.get("Error", {}).get("Code", "")
-        if code in _EXPIRED_CODES:
+        code = error_code(exc)
+        if code in EXPIRED_CODES:
             return AwsAuthError(f"AWS credentials expired while {doing}. Refresh them and retry.")
         if code in _AUTH_CODES:
             return AwsAuthError(
@@ -72,6 +85,8 @@ class AWSClientProvider:
     @property
     def session(self) -> Any:
         if self._session is None:
+            import boto3  # deferred: commands that never touch AWS should not pay for it
+
             try:
                 self._session = boto3.Session(profile_name=self.profile, region_name=self._region)
             except BotoCoreError as exc:
@@ -92,6 +107,8 @@ class AWSClientProvider:
     def client(self, service: str, region: str | None = None) -> Any:
         key = (service, region)
         if key not in self._clients:
+            from botocore.config import Config
+
             config = Config(
                 retries={"mode": "adaptive", "max_attempts": 5},
                 connect_timeout=5,

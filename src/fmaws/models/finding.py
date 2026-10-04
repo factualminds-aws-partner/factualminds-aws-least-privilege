@@ -35,3 +35,8 @@ class Finding(BaseModel):
     documentation_url: str = ""
     confidence: Confidence = Confidence.HIGH
     is_auto_fixable: bool = False
+
+
+def finding_order(finding: Finding) -> tuple[int, str, str]:
+    """Most severe first, then stable by rule and resource."""
+    return (-finding.severity.rank, finding.id, finding.resource)

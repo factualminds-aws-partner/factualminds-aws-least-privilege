@@ -55,7 +55,7 @@ class Network:
             )
             attached = {g["GroupId"] for eni in interfaces for g in eni.get("Groups", [])}
         except AuditDenied as exc:
-            ctx.denied[exc.permission] += 1
+            ctx.gap(exc.permission)
             attached = None  # unknown: assume in use, with lower confidence
 
         findings: list[Finding] = []
@@ -77,7 +77,7 @@ class Network:
                         f"{label} allows all ports from 0.0.0.0/0 or ::/0.{usage}",
                         severity=None if in_use else Severity.MEDIUM,
                         confidence=confidence,
-                    )  # fmt: skip
+                    )
                 )
             else:
                 names = ", ".join(f"{p} ({SENSITIVE_PORTS[p]})" for p in sorted(ports))
@@ -89,7 +89,7 @@ class Network:
                         severity=None if in_use else Severity.LOW,
                         evidence={"ports": sorted(ports)},
                         confidence=confidence,
-                    )  # fmt: skip
+                    )
                 )
         return findings
 

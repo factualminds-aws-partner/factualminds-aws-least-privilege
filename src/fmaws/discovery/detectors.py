@@ -16,7 +16,7 @@ from fmaws.discovery.base import Detection, register
 from fmaws.models.requirement import Confidence, ResourceRequirement, SourceRef
 from fmaws.policy import catalog, s3
 from fmaws.policy.arns import NAME_RE, parse_arn
-from fmaws.utils.text import find_line
+from fmaws.utils.text import find_line, line_at
 
 _ARN_RE = re.compile(
     r"arn:(?:aws|aws-cn|aws-us-gov):[a-z0-9-]+:[a-z0-9-]*:(?:\d{12})?:[^\s\"'`,;<>()\[\]{}\\]+"
@@ -31,13 +31,12 @@ _BEDROCK_MODEL_RE = re.compile(
     r"(?:(?:us|eu|apac|global)\.)?(?:anthropic|amazon|meta|mistral|cohere|ai21|stability|deepseek)"
     r"\.[a-z0-9][a-z0-9.:-]+"
 )
-_TEXT_SUFFIXES = {
-    ".env", ".yml", ".yaml", ".json", ".tf", ".tfvars", ".toml", ".ini", ".properties", ".conf",
-    ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".java", ".kt", ".rb", ".php", ".cs",
-    ".rs", ".sh",
-}  # fmt: skip
 _SOURCE_SUFFIXES = {
     ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".java", ".kt", ".rb", ".php", ".cs", ".rs",
+}  # fmt: skip
+_TEXT_SUFFIXES = _SOURCE_SUFFIXES | {
+    ".env", ".yml", ".yaml", ".json", ".tf", ".tfvars", ".toml", ".ini", ".properties", ".conf",
+    ".sh",
 }  # fmt: skip
 
 
@@ -109,7 +108,7 @@ class ArnDetector:
     ) -> None:
         if "*" in arn or "?" in arn or "$" in arn:
             return
-        line = text.count("\n", 0, offset) + 1
+        line = line_at(text, offset)
         bucket = _S3_ARN_RE.match(arn)
         if bucket:
             result.requirements.append(
@@ -120,7 +119,7 @@ class ArnDetector:
                     line,
                     f"{kind} referenced in {file}",
                     Confidence.MEDIUM,
-                )  # fmt: skip
+                )
             )
             return
         for definition in catalog.CATALOG.values():
@@ -135,7 +134,7 @@ class ArnDetector:
                     line,
                     f"{kind} referenced in {file}",
                     Confidence.MEDIUM,
-                )  # fmt: skip
+                )
             )
             if parsed.get("region"):
                 result.regions.append(parsed["region"])
@@ -167,7 +166,7 @@ def env_pairs(file: str, pairs: list[tuple[str, Any, int | None]], origin: str) 
         result.requirements.append(
             _requirement(
                 service, value, file, line, f"Referenced by {origin} in {file}", Confidence.MEDIUM
-            )  # fmt: skip
+            )
         )
 
     for key, raw, line in pairs:
@@ -291,7 +290,7 @@ def cfn_resources(file: str, text: str, resources: Any, origin: str) -> Detectio
                 find_line(text, name),
                 f"{origin} resource {logical_id} ({kind})",
                 Confidence.LOW,
-            )  # fmt: skip
+            )
         )
     if generated:
         result.notes.append(
@@ -436,7 +435,7 @@ class TerraformDetector:
                             find_line(text, f'"{name}"'),
                             f"Terraform resource {kind}.{label}",
                             Confidence.LOW,
-                        )  # fmt: skip
+                        )
                     )
         for block in parsed.get("provider", []):
             aws = _first(block.get("aws") or block.get('"aws"'))
@@ -558,7 +557,7 @@ class SdkDetector:
             confident = intents if len(first_seen) == 1 else ()
             for name, offset in sorted(first_seen.items()):
                 requirement = _requirement(
-                    service, name, relative_path, text.count("\n", 0, offset) + 1,
+                    service, name, relative_path, line_at(text, offset),
                     f"AWS SDK call in {relative_path}", Confidence.MEDIUM, confident,
                 )  # fmt: skip
                 if not confident and intents:

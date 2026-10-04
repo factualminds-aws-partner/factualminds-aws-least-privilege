@@ -26,15 +26,18 @@ class CloudTrail:
     def run(self, ctx: AuditContext, region: str | None) -> list[Finding]:
         account_arn = f"arn:{ctx.partition}:cloudtrail:*:{ctx.account}:trail/*"
         trails: dict[str, dict[str, Any]] = {}
-        for audited in ctx.regions:
-            listed = ctx.call("cloudtrail", "describe_trails", audited, includeShadowTrails=True)
+        listings = ctx.map(
+            lambda r: ctx.call("cloudtrail", "describe_trails", r, includeShadowTrails=True),
+            ctx.regions,
+        )
+        for listed in listings:
             for trail in listed.get("trailList", []):
                 trails.setdefault(trail["TrailARN"], trail)
         if not trails:
             return [
                 make(
                     "CLOUDTRAIL_NO_TRAIL", account_arn, f"No trail covers {', '.join(ctx.regions)}."
-                )  # fmt: skip
+                )
             ]
 
         findings: list[Finding] = []
@@ -55,7 +58,7 @@ class CloudTrail:
                         "CLOUDTRAIL_LOG_VALIDATION_DISABLED",
                         arn,
                         "Log file validation is disabled.",
-                    )  # fmt: skip
+                    )
                 )
             bucket = trail.get("S3BucketName")
             if bucket:
@@ -68,7 +71,7 @@ class CloudTrail:
                             "CLOUDTRAIL_BUCKET_PUBLIC",
                             f"arn:{ctx.partition}:s3:::{bucket}",
                             f"The log bucket of trail {trail.get('Name', arn)} is public.",
-                        )  # fmt: skip
+                        )
                     )
 
         uncovered = [
@@ -82,7 +85,7 @@ class CloudTrail:
                     account_arn,
                     f"No logging trail covers: {', '.join(uncovered)}.",
                     evidence={"regions": uncovered},
-                )  # fmt: skip
+                )
             )
         if logging and not any(t.get("IsMultiRegionTrail") for t in logging):
             findings.append(
@@ -90,7 +93,7 @@ class CloudTrail:
                     "CLOUDTRAIL_NOT_MULTI_REGION",
                     account_arn,
                     "Every logging trail is limited to a single Region.",
-                )  # fmt: skip
+                )
             )
         if logging and not management:
             findings.append(
@@ -98,7 +101,7 @@ class CloudTrail:
                     "CLOUDTRAIL_MANAGEMENT_EVENTS_GAP",
                     account_arn,
                     "No logging trail records both read and write management events.",
-                )  # fmt: skip
+                )
             )
         return findings
 

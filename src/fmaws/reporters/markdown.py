@@ -76,7 +76,7 @@ def render_markdown(report: Report) -> str:
             lines.append("")
     if report.findings:
         lines += ["## Findings", ""]
-        for finding in sorted(report.findings, key=lambda f: (-f.severity.rank, f.id, f.resource)):
+        for finding in report.sorted_findings():
             lines += [f"### {finding.severity.value}: {finding.title}", ""]
             if finding.resource:
                 lines += [f"- Resource: `{finding.resource}`"]

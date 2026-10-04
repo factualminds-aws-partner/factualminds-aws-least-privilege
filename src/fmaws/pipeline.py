@@ -1,5 +1,6 @@
 """The generate pipeline: configuration and discovery in, explained candidate policy out."""
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,10 +13,18 @@ from fmaws.models.finding import Severity
 from fmaws.models.policy import PolicyDocument
 from fmaws.models.report import Report, status
 from fmaws.models.requirement import Confidence
-from fmaws.policy.arns import ArnContext
+from fmaws.policy.arns import REGION_RE, ArnContext
 from fmaws.policy.generator import generate_policy
 from fmaws.validators.access_analyzer import validate_with_access_analyzer
 from fmaws.validators.local import validate_policy_document
+
+_ACCOUNT_RE = re.compile(r"\d{12}")
+
+
+def _valid(values: list[str], pattern: re.Pattern[str]) -> list[str]:
+    """Hints come from project files: anything that is not a plain region or account is dropped."""
+    return [v for v in values if pattern.fullmatch(v)]
+
 
 WILDCARD_SEVERITY = {"info": Severity.INFO, "warning": Severity.MEDIUM, "error": Severity.HIGH}
 
@@ -76,7 +85,7 @@ def run_generate(options: GenerateOptions) -> tuple[Report, PolicyDocument | Non
 
     region: str | None = "*"
     if not options.all_regions:
-        region = options.region or config.aws.region or single(detection.regions)
+        region = options.region or config.aws.region or single(_valid(detection.regions, REGION_RE))
         region = region or _ambient_region(provider)
     if not region:
         region = "*"
@@ -84,7 +93,7 @@ def run_generate(options: GenerateOptions) -> tuple[Report, PolicyDocument | Non
             "Region unknown: ARNs use a region wildcard. Set aws.region in fmaws.yaml or "
             "pass --region."
         )
-    account = config.aws.account_id or single(detection.accounts)
+    account = config.aws.account_id or single(_valid(detection.accounts, _ACCOUNT_RE))
     if not account and online:
         account = provider.identity()["account"]
     ctx = ArnContext(partition=config.aws.partition, region=region, account=account or "*")

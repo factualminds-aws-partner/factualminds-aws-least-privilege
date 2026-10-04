@@ -42,9 +42,13 @@ def walk(root: Path, paths: list[str], exclude: list[Path]) -> tuple[list[Path],
                 subdirs[:] = sorted(d for d in subdirs if d not in SKIP_DIRS)
                 candidates.extend(Path(directory) / name for name in names)
         for path in candidates:
-            if path.resolve() in excluded:
+            try:
+                resolved = path.resolve()
+            except OSError:
                 continue
-            if not _inside(path, root):
+            if resolved in excluded:
+                continue
+            if not resolved.is_relative_to(root):
                 notes.append(f"Skipped {path.name}: symlink points outside the project.")
                 continue
             if not path.is_file():

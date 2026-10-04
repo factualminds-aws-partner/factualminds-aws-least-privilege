@@ -7,7 +7,14 @@ from fmaws.errors import ConfigError
 from fmaws.models.policy import Conditions, Explanation, PolicyDocument, Statement
 from fmaws.models.requirement import ResourceRequirement
 from fmaws.policy import catalog, s3
-from fmaws.policy.arns import ArnContext, build_arn, kms_key_arn, parse_arn, validate_name
+from fmaws.policy.arns import (
+    ArnContext,
+    build_arn,
+    kms_key_arn,
+    kms_via_service,
+    parse_arn,
+    validate_name,
+)
 from fmaws.policy.optimizer import optimize
 
 # Cross-region inference profile IDs are a geography prefix followed by the model ID.
@@ -91,10 +98,7 @@ def _generic(
     if kms_key:
         kms_actions = {a for i in req.intents for a in definition.kms_actions.get(i, ())}
         if kms_actions:
-            via: Conditions = {}
-            if include_conditions and ctx.region != "*":
-                service_host = f"{definition.kms_via_service}.{ctx.region}.amazonaws.com"
-                via = {"StringEquals": {"kms:ViaService": [service_host]}}
+            via = kms_via_service(definition.kms_via_service, ctx, include_conditions)
             statements.append(
                 Statement(
                     actions=tuple(sorted(kms_actions)),

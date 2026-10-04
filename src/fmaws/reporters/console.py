@@ -7,7 +7,7 @@ from rich.table import Table
 from rich.text import Text
 
 from fmaws.models.finding import Severity
-from fmaws.models.report import Report
+from fmaws.models.report import MISSING, UNKNOWN, UNUSED, USED, Report
 from fmaws.reporters.base import CANDIDATE_NOTICE, OBSERVE_LABELS, UNUSED_NOTICE, register
 from fmaws.utils.redact import mask_account
 
@@ -20,10 +20,10 @@ _SEVERITY_STYLE = {
 }
 _STATUS_STYLE = {"PASS": "green", "FAIL": "bold red"}
 _OBSERVE_STYLE = {
-    "USED": "green",
-    "UNUSED": "yellow",
-    "UNKNOWN": "dim",
-    "POTENTIALLY MISSING": "bold red",
+    USED: "green",
+    UNUSED: "yellow",
+    UNKNOWN: "dim",
+    MISSING: "bold red",
 }
 
 
@@ -135,7 +135,7 @@ def render_console(report: Report) -> str:
         line(_plural(report.warnings, "warning"))
         line(_plural(report.recommendations, "recommendation"))
 
-    for finding in sorted(report.findings, key=lambda f: (-f.severity.rank, f.id, f.resource)):
+    for finding in report.sorted_findings():
         line()
         heading = Text()
         heading.append(finding.severity.value, style=_SEVERITY_STYLE[finding.severity.value])

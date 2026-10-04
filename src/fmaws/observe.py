@@ -6,17 +6,17 @@ unnecessary. Nothing here removes a permission without saying so.
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from fmaws.aws.session import AWSClientProvider, translate
+from fmaws.aws.session import AWSClientProvider, read_only_manifest, translate
 from fmaws.errors import ConfigError, FmawsError
-from fmaws.models.report import Observation
-from fmaws.policy.arns import iam_match
+from fmaws.models.report import MISSING, UNKNOWN, UNUSED, USED, Observation
+from fmaws.validators.local import action_allows, as_list
 
 # Every AWS operation observe may call. permissions/observe-policy.json is generated from this.
 OPERATIONS: dict[tuple[str, str], str] = {
@@ -26,7 +26,6 @@ OPERATIONS: dict[tuple[str, str], str] = {
     ("accessanalyzer", "get_generated_policy"): "access-analyzer:GetGeneratedPolicy",
 }
 
-USED, UNUSED, UNKNOWN, MISSING = "USED", "UNUSED", "UNKNOWN", "POTENTIALLY MISSING"
 _DENIED_CODES = ("AccessDenied", "AccessDeniedException", "Client.UnauthorizedOperation",
                  "UnauthorizedOperation")  # fmt: skip
 # CloudTrail event source -> IAM service prefix, where they differ.
@@ -51,13 +50,7 @@ def _call(
 
 
 def permission_manifest() -> dict[str, Any]:
-    actions = sorted({*OPERATIONS.values(), "sts:GetCallerIdentity"})
-    return {
-        "Version": "2012-10-17",
-        "Statement": [
-            {"Sid": "FmawsObserveReadOnly", "Effect": "Allow", "Action": actions, "Resource": "*"}
-        ],
-    }
+    return read_only_manifest("FmawsObserveReadOnly", OPERATIONS)
 
 
 def principal_arn(value: str, account: str, partition: str = "aws") -> str:
@@ -173,16 +166,18 @@ def cloudtrail_events(
     )
 
 
-def _policy_actions(document: Any) -> list[str]:
-    statements = document.get("Statement", []) if isinstance(document, dict) else []
-    actions: list[str] = []
-    for statement in statements if isinstance(statements, list) else [statements]:
+def _allow_statements(document: Any) -> Iterator[tuple[str, dict[str, Any], list[str]]]:
+    """(label, statement, actions) of every Allow statement. The label identifies a statement
+    in the report and when removing actions, so it is computed in exactly one place."""
+    statements = as_list(document.get("Statement", [])) if isinstance(document, dict) else []
+    for index, statement in enumerate(statements):
         if isinstance(statement, dict) and statement.get("Effect") == "Allow":
-            value = statement.get("Action", [])
-            actions += [
-                a for a in (value if isinstance(value, list) else [value]) if isinstance(a, str)
-            ]
-    return actions
+            actions = [a for a in as_list(statement.get("Action", [])) if isinstance(a, str)]
+            yield str(statement.get("Sid") or f"Statement[{index}]"), statement, actions
+
+
+def _policy_actions(document: Any) -> list[str]:
+    return [action for _, _, actions in _allow_statements(document) for action in actions]
 
 
 def observed_policy(document: Any, evidence: Evidence, label: str) -> None:
@@ -210,7 +205,7 @@ def access_analyzer_job(provider: AWSClientProvider, job_id: str, evidence: Evid
 
 
 def _allowed(patterns: list[str], action: str) -> bool:
-    return any(iam_match(p.lower(), action.lower()) for p in patterns)
+    return any(action_allows(pattern, action) for pattern in patterns)
 
 
 def _day(moment: datetime | None) -> str | None:
@@ -219,17 +214,12 @@ def _day(moment: datetime | None) -> str | None:
 
 def classify(document: dict[str, Any], evidence: Evidence, cutoff: datetime) -> list[Observation]:
     """One observation per candidate action, then the activity the candidate does not cover."""
-    observations: list[Observation] = []
-    statements = document.get("Statement", [])
     candidate = _policy_actions(document)
-    for index, statement in enumerate(statements if isinstance(statements, list) else [statements]):
-        if not isinstance(statement, dict) or statement.get("Effect") != "Allow":
-            continue
-        label = str(statement.get("Sid") or f"Statement[{index}]")
-        value = statement.get("Action", [])
-        for action in value if isinstance(value, list) else [value]:
-            if isinstance(action, str):
-                observations.append(_classify_action(action, label, evidence, cutoff))
+    observations = [
+        _classify_action(action, label, evidence, cutoff)
+        for label, _, actions in _allow_statements(document)
+        for action in actions
+    ]
 
     def missing(action: str, when: datetime | None, source: str, detail: str) -> None:
         if not _allowed(candidate, action) and not any(
@@ -242,7 +232,7 @@ def classify(document: dict[str, Any], evidence: Evidence, cutoff: datetime) -> 
                     last_seen=_day(when),
                     source=source,
                     detail=detail,
-                )  # fmt: skip
+                )
             )
 
     for action, when in sorted(evidence.denied.items()):
@@ -298,9 +288,12 @@ def _classify_action(action: str, label: str, evidence: Evidence, cutoff: dateti
 
 
 def recommend(
-    document: dict[str, Any], observations: list[Observation], days: int, min_days: int,
+    document: dict[str, Any],
+    observations: list[Observation],
+    days: int,
+    min_days: int,
     declared: set[str],
-) -> dict[str, Any]:  # fmt: skip
+) -> dict[str, Any]:
     """The candidate without long-unused, undeclared actions. Marks what it removed.
 
     ``declared`` holds the labels of statements backed by explicit configuration: those are
@@ -312,21 +305,19 @@ def recommend(
             if observation.status == UNUSED and observation.statement not in declared:
                 observation.removed = True
                 removable.add((observation.statement, observation.action))
-    statements = document.get("Statement", [])
+    trimmed = {
+        id(statement): [a for a in actions if (label, a) not in removable]
+        for label, statement, actions in _allow_statements(document)
+    }
     kept: list[Any] = []
-    for index, statement in enumerate(statements if isinstance(statements, list) else [statements]):
-        if not isinstance(statement, dict) or statement.get("Effect") != "Allow":
-            kept.append(statement)
-            continue
-        label = str(statement.get("Sid") or f"Statement[{index}]")
-        value = statement.get("Action", [])
-        actions = [a for a in (value if isinstance(value, list) else [value])
-                   if (label, a) not in removable]  # fmt: skip
-        if actions:
+    for statement in as_list(document.get("Statement", [])):
+        if id(statement) not in trimmed:
+            kept.append(statement)  # not an Allow statement: passed through untouched
+        elif trimmed[id(statement)]:
+            actions = trimmed[id(statement)]
             kept.append({**statement, "Action": actions[0] if len(actions) == 1 else actions})
     return {**document, "Statement": kept}
 
 
-def window(days: int, now: datetime | None = None) -> tuple[datetime, datetime]:
-    end = now or datetime.now(UTC)
-    return end - timedelta(days=days), end
+def window(days: int, end: datetime) -> datetime:
+    return end - timedelta(days=days)

@@ -4,22 +4,27 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from fmaws.models.finding import Finding, Severity
+from fmaws.models.finding import Finding, Severity, finding_order
 from fmaws.models.policy import Statement
 from fmaws.models.requirement import ResourceRequirement
 
 NOT_RUN = "NOT RUN"
+COMPLETED, SKIPPED, FAILED = "completed", "skipped", "failed"
+USED, UNUSED, UNKNOWN, MISSING = "USED", "UNUSED", "UNKNOWN", "POTENTIALLY MISSING"
 
 
 class AnalyzerStatus(BaseModel):
     name: str
-    status: str  # completed | skipped | failed
+    status: str  # COMPLETED | SKIPPED | FAILED
     detail: str = ""
+    # The analyzer did not look at everything, for a reason other than configuration.
+    # Kept out of the report: it drives the --fail-on gate, the detail text explains it.
+    incomplete: bool = Field(default=False, exclude=True)
 
 
 class Observation(BaseModel):
     action: str
-    status: str  # USED | UNUSED | UNKNOWN | POTENTIALLY MISSING
+    status: str  # USED | UNUSED | UNKNOWN | MISSING
     statement: str = ""
     last_seen: str | None = None
     source: str = ""
@@ -52,6 +57,9 @@ class Report(BaseModel):
             key=lambda o: (o.action.lower(), o.statement),
         )
 
+    def sorted_findings(self) -> list[Finding]:
+        return sorted(self.findings, key=finding_order)
+
     def count(self, severity: Severity) -> int:
         return sum(f.severity is severity for f in self.findings)
 
@@ -59,11 +67,11 @@ class Report(BaseModel):
         """ "Completed: 8 analyzers" lines followed by the reason for everything that did not."""
         lines = [
             f"{label}: {sum(a.status == state for a in self.analyzers)}"
-            + (" analyzers" if state == "completed" else "")
+            + (" analyzers" if state == COMPLETED else "")
             for label, state in (
-                ("Completed", "completed"),
-                ("Skipped", "skipped"),
-                ("Failed", "failed"),
+                ("Completed", COMPLETED),
+                ("Skipped", SKIPPED),
+                ("Failed", FAILED),
             )
         ]
         lines += [f"  {a.name}: {a.status}, {a.detail}" for a in self.analyzers if a.detail]

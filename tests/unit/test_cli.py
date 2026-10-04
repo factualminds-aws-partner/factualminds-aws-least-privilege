@@ -418,3 +418,26 @@ def test_redaction_is_applied_to_everything_printed():
     assert "AKIAIOSFODNN7EXAMPLE" not in text and "hunter2" not in text and "abc/def" not in text
     arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/api-??????"
     assert redact(arn) == arn
+
+
+def test_malformed_region_is_a_configuration_error(project):
+    root = project()
+    (root / "fmaws.yaml").write_text(
+        "resources:\n  sqs:\n    - queue: jobs\n      actions: [send]\n"
+    )
+    result = runner.invoke(app, ["generate", "--region", "us-east-1:999999999999"])
+    assert result.exit_code == 2 and "Invalid AWS region" in result.output
+    assert not (root / "generated-policy.json").exists()
+
+
+def test_region_hints_from_project_files_cannot_inject_arn_fields(project):
+    root = project()
+    (root / "fmaws.yaml").write_text(
+        "resources:\n  sqs:\n    - queue: jobs\n      actions: [send]\n"
+    )
+    (root / "main.tf").write_text('provider "aws" {\n  region = "us-east-1:999999999999"\n}\n')
+    (root / "serverless.yml").write_text("service: x\nprovider:\n  region: eu-west-1/*\n")
+    result = runner.invoke(app, ["generate"])
+    assert result.exit_code == 0, result.output
+    policy = (root / "generated-policy.json").read_text()
+    assert "arn:aws:sqs:*:*:jobs" in policy and "999999999999" not in policy

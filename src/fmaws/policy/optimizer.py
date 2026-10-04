@@ -29,7 +29,9 @@ def _explanations(*groups: tuple[Explanation, ...]) -> tuple[Explanation, ...]:
 
 def _normalize(statement: Statement) -> Statement:
     resources = set(statement.resources)
-    kept = {r for r in resources if not any(o != r and iam_match(o, r) for o in resources)}
+    # Only a pattern can cover another resource.
+    patterns = [o for o in resources if "*" in o or "?" in o]
+    kept = {r for r in resources if not any(o != r and iam_match(o, r) for o in patterns)}
     conditions: Conditions = {
         operator: {key: sorted(set(values)) for key, values in sorted(keys.items())}
         for operator, keys in sorted(statement.conditions.items())
@@ -74,13 +76,14 @@ def _drop_covered(statements: list[Statement]) -> list[Statement]:
     """Remove actions already granted on the same resources by a broader statement."""
     extra: dict[int, tuple[Explanation, ...]] = {}
     kept: dict[int, Statement] = {}
+    actions = [set(s.actions) for s in statements]
     for index, statement in enumerate(statements):
-        remaining = set(statement.actions)
+        remaining = set(actions[index])
         covering = [
             i for i, other in enumerate(statements) if i != index and _covers(other, statement)
         ]
         for i in covering:
-            remaining -= set(statements[i].actions)
+            remaining -= actions[i]
         if remaining:
             kept[index] = statement.model_copy(update={"actions": tuple(sorted(remaining))})
         else:
