@@ -1,5 +1,6 @@
 # FactualMinds AWS Least Privilege Advisor
 
+[![CI](https://github.com/factualminds-aws-partner/factualminds-aws-least-privilege/actions/workflows/ci.yml/badge.svg)](https://github.com/factualminds-aws-partner/factualminds-aws-least-privilege/actions/workflows/ci.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
