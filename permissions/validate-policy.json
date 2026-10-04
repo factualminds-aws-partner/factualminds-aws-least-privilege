@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FmawsValidate",
+      "Effect": "Allow",
+      "Action": "access-analyzer:ValidatePolicy",
+      "Resource": "*"
+    }
+  ]
+}

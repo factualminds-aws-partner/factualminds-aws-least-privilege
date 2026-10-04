@@ -1,0 +1,18 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Resources:
+  TenantData:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: saas-tenant-data
+  Tenants:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: tenants
+  Billing:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: billing-jobs
+  Scratch:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-scratch"

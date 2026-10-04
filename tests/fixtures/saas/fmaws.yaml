@@ -1,0 +1,27 @@
+application:
+  name: saas-platform
+  environment: production
+aws:
+  region: us-east-1
+  account_id: "222233334444"
+resources:
+  s3:
+    - bucket: saas-tenant-data
+      prefixes:
+        - tenants/
+      actions: [read, write, delete, list]
+      versioned: true
+  dynamodb:
+    - table: tenants
+      actions: [read, write]
+    - table: audit-log
+      actions: [write]
+  kms:
+    - key: alias/saas-tenant-data
+      actions: [encrypt, decrypt]
+  eventbridge:
+    - bus: saas-events
+      actions: [publish]
+  ses:
+    - identity: notifications.example.com
+      actions: [send]

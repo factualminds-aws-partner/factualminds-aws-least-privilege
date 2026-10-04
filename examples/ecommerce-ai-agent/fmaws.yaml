@@ -1,0 +1,65 @@
+application:
+  name: ecommerce-agent
+  environment: production
+
+aws:
+  region: ap-south-1
+  account_id: "111122223333"
+
+resources:
+  s3:
+    - bucket: ecommerce-assets
+      prefixes:
+        - uploads/
+        - product-images/
+      actions:
+        - read
+        - write
+        - list
+      kms_key: 1234abcd-12ab-34cd-56ef-1234567890ab
+
+    - bucket: ecommerce-reports
+      prefixes:
+        - reports/
+      actions:
+        - read
+
+  dynamodb:
+    - table: customers
+      actions:
+        - read
+    - table: orders
+      actions:
+        - read
+        - write
+
+  secretsmanager:
+    - secret: prod/ecommerce/api
+      actions:
+        - read
+
+  sqs:
+    - queue: order-processing
+      actions:
+        - send
+        - receive
+
+  sns:
+    - topic: order-events
+      actions:
+        - publish
+
+  bedrock:
+    - models:
+        - anthropic.claude-3-haiku-20240307-v1:0
+      actions:
+        - invoke
+
+  logs:
+    - log_group: /ecommerce/agent
+      actions:
+        - write
+
+policy:
+  include_conditions: true
+  wildcard_action_threshold: warning

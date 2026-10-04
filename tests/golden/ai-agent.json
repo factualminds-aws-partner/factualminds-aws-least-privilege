@@ -1,0 +1,49 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BedrockInvokeModel7b6a81",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "arn:aws:bedrock:us-west-2:333344445555:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+      ]
+    },
+    {
+      "Sid": "DynamodbBatchGetItem66acd9",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-west-2:333344445555:table/agent-memory",
+        "arn:aws:dynamodb:us-west-2:333344445555:table/agent-memory/index/*"
+      ]
+    },
+    {
+      "Sid": "S3ListBucketa81093",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::agent-knowledge-base"
+    },
+    {
+      "Sid": "S3GetObjectd1bfa7",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::agent-knowledge-base/*"
+    },
+    {
+      "Sid": "SecretsmanagerGetSecretValue3a2e81",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:us-west-2:333344445555:secret:agent/tools/api-keys-??????"
+    }
+  ]
+}

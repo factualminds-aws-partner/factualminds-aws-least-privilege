@@ -1,0 +1,128 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BedrockInvokeModel704a5a",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "arn:aws:bedrock:ap-south-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+    },
+    {
+      "Sid": "DynamodbBatchGetItem29e95f",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:ap-south-1:111122223333:table/customers",
+        "arn:aws:dynamodb:ap-south-1:111122223333:table/customers/index/*"
+      ]
+    },
+    {
+      "Sid": "DynamodbBatchGetItemc43141",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:ap-south-1:111122223333:table/orders",
+        "arn:aws:dynamodb:ap-south-1:111122223333:table/orders/index/*"
+      ]
+    },
+    {
+      "Sid": "KmsDecrypt4a27ca",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:ap-south-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": [
+            "s3.ap-south-1.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "LogsCreateLogStream49d70c",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:ap-south-1:111122223333:log-group:/ecommerce/agent:*"
+    },
+    {
+      "Sid": "S3GetObjectb3777a",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::ecommerce-agent-traces/*",
+        "arn:aws:s3:::ecommerce-reports/reports/*"
+      ]
+    },
+    {
+      "Sid": "S3ListBucket48cea8",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::ecommerce-assets",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "product-images/*",
+            "uploads/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "S3GetObject44a7ed",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::ecommerce-assets/product-images/*",
+        "arn:aws:s3:::ecommerce-assets/uploads/*"
+      ]
+    },
+    {
+      "Sid": "SecretsmanagerGetSecretValue9a84ce",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:ap-south-1:111122223333:secret:prod/ecommerce/api-??????"
+    },
+    {
+      "Sid": "SnsPublish9b26fd",
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "arn:aws:sns:ap-south-1:111122223333:order-events"
+    },
+    {
+      "Sid": "SqsChangeMessageVisibilitya878f5",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ChangeMessageVisibility",
+        "sqs:DeleteMessage",
+        "sqs:ReceiveMessage",
+        "sqs:SendMessage"
+      ],
+      "Resource": "arn:aws:sqs:ap-south-1:111122223333:order-processing"
+    }
+  ]
+}

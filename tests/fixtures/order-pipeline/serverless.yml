@@ -1,0 +1,18 @@
+service: order-pipeline
+provider:
+  name: aws
+  region: us-east-2
+  environment:
+    ORDERS_DDB_TABLE: order-pipeline-orders
+    ORDER_EVENTS_TOPIC_ARN: arn:aws:sns:us-east-2:555566667777:order-events
+functions:
+  intake:
+    handler: intake.handler
+    environment:
+      ORDERS_QUEUE_URL: https://sqs.us-east-2.amazonaws.com/555566667777/orders-intake.fifo
+resources:
+  Resources:
+    DeadLetters:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: orders-dead-letters

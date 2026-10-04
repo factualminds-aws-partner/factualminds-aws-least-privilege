@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+generated-policy.json
+
+# Internal planning and agent tooling
+docs/superpowers/
+.claude/
+.codegraph/
+CLAUDE.md
+AGENTS.md

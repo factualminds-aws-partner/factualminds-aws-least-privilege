@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FmawsObserveReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "access-analyzer:GetGeneratedPolicy",
+        "cloudtrail:LookupEvents",
+        "iam:GenerateServiceLastAccessedDetails",
+        "iam:GetServiceLastAccessedDetails",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

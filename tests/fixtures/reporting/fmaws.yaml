@@ -1,0 +1,30 @@
+application:
+  name: reporting
+  environment: staging
+aws:
+  region: eu-central-1
+  account_id: "666677778888"
+resources:
+  s3:
+    - bucket: analytics-exports
+      account_id: "999900001111"
+      prefixes: [daily/]
+      actions: [read, list]
+    - bucket: reporting-output
+      actions: [write, list]
+      bucket_location: true
+  rds_data:
+    - cluster: reporting-aurora
+      actions: [execute]
+  secretsmanager:
+    - secret: staging/reporting/db
+      actions: [read]
+      kms_key: aaaabbbb-cccc-dddd-eeee-ffff00001111
+  dynamodb:
+    - table: report-runs
+      actions: [read, write, list]
+  lambda:
+    - function: render-pdf
+      actions: [invoke]
+discovery:
+  enabled: false

@@ -1,0 +1,16 @@
+aws:
+  region: eu-west-1
+  account_id: "444455556666"
+resources:
+  s3:
+    - bucket: image-pipeline-uploads
+      prefixes: [incoming/]
+      actions: [read, delete]
+    - bucket: image-pipeline-thumbnails
+      prefixes: [thumbs/, thumbs/large/]
+      actions: [write]
+      multipart: true
+  sqs:
+    - queue: resize-jobs
+      actions: [receive]
+      kms_key: 9f8e7d6c-1111-2222-3333-444455556666

@@ -1,0 +1,47 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "KmsDecrypt59650a",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:eu-west-1:444455556666:key/9f8e7d6c-1111-2222-3333-444455556666",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": [
+            "sqs.eu-west-1.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "S3AbortMultipartUploadbb868f",
+      "Effect": "Allow",
+      "Action": [
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::image-pipeline-thumbnails/thumbs/*"
+    },
+    {
+      "Sid": "S3DeleteObject3becf5",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::image-pipeline-uploads/incoming/*"
+    },
+    {
+      "Sid": "SqsChangeMessageVisibilityb4520d",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ChangeMessageVisibility",
+        "sqs:DeleteMessage",
+        "sqs:ReceiveMessage"
+      ],
+      "Resource": "arn:aws:sqs:eu-west-1:444455556666:resize-jobs"
+    }
+  ]
+}

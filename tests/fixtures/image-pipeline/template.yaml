@@ -1,0 +1,17 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  Uploads:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: image-pipeline-uploads
+  Resizer:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: resize.handler
+      Runtime: python3.12
+      Environment:
+        Variables:
+          THUMBNAIL_BUCKET: image-pipeline-thumbnails
+          JOBS_QUEUE_URL: https://sqs.eu-west-1.amazonaws.com/444455556666/resize-jobs
+          UPLOADS_BUCKET: !Ref Uploads

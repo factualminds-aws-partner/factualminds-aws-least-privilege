@@ -1,0 +1,43 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DynamodbBatchGetItema80983",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-2:555566667777:table/order-pipeline-orders",
+        "arn:aws:dynamodb:us-east-2:555566667777:table/order-pipeline-orders/index/*"
+      ]
+    },
+    {
+      "Sid": "S3GetObject1a2d8f",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::order-pipeline-invoices/*"
+    },
+    {
+      "Sid": "SnsPublish889935",
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "arn:aws:sns:us-east-2:555566667777:order-events"
+    },
+    {
+      "Sid": "SqsGetQueueAttributes45d1e5",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl"
+      ],
+      "Resource": [
+        "arn:aws:sqs:us-east-2:555566667777:orders-dead-letters",
+        "arn:aws:sqs:us-east-2:555566667777:orders-intake.fifo"
+      ]
+    }
+  ]
+}

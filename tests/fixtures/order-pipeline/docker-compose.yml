@@ -1,0 +1,7 @@
+services:
+  worker:
+    image: order-worker
+    environment:
+      - INVOICE_BUCKET=order-pipeline-invoices
+      - STRIPE_SECRET_KEY=sk_live_not_a_real_key_000000000000
+      - DB_PASSWORD=correct-horse-battery-staple
